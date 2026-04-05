@@ -8,7 +8,6 @@ from src.game_manager import GameManager
 from src.entities import Player, Enemy
 from src.mechanics import WordDictionary, TileBoard
 
-# --- MODERN UI COLORS ---
 WHITE = (248, 250, 252)
 BLACK = (2, 6, 23)
 GRAY = (71, 85, 105)
