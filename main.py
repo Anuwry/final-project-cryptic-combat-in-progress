@@ -7,6 +7,7 @@ from src.config import DATA_DIR, RAW_DATA_DIR, WORDS_DATA_DIR, BASE_DIR
 from src.game_manager import GameManager
 from src.entities import Player, Enemy
 from src.mechanics import WordDictionary, TileBoard
+from src.map_loader import GameMap
 
 WHITE = (248, 250, 252)
 BLACK = (2, 6, 23)
@@ -76,6 +77,11 @@ class PygameApp:
         self.player_max_hp = 100
         self.player = Player(hp=self.player_max_hp, base_attack=15)
         
+        # 🟢 NEW: Map System
+        self.game_map = GameMap("data/maps/overworld.json")
+        self.statues_collected = 0
+        self.total_statues = len(self.game_map.get_statues())
+        
         self.floating_texts = []
         self.p_anim_timer = 0
         self.p_anim_x = 0
@@ -90,6 +96,11 @@ class PygameApp:
         self.absent_letters = set()
         self.yellow_letters = set()
         self.green_letters = [None] * 5
+        
+        # 🟢 NEW: NPC Dialogue
+        self.showing_dialogue = False
+        self.current_npc = None
+        self.dialogue_timer = 0
         
         self.setup_assets()
         self.setup_selection()
@@ -164,12 +175,13 @@ class PygameApp:
         self.player_battle_img = self.sprite_sheet.get_equipped_image_by_grid(layers, 10)
 
     def setup_overworld(self):
-        self.map_player_pos = [400, 300]
+        # 🟢 NEW: ใช้ spawn point จาก map
+        self.map_player_pos = list(self.game_map.spawn_point)
         self.map_player_speed = 4
         self.facing_left_overworld = False
         self.is_moving = False
         self.move_timer_overworld = 0
-        self.statue_rect = pygame.Rect(375, 100, 60, 80)
+        
         self.enemy_battle_pos = (550, 100)
         self.player_battle_pos = (80, 230)
 
@@ -195,7 +207,9 @@ class PygameApp:
                 self.gm.export_data_to_csv(); pygame.quit(); sys.exit()
             if self.state == STATE_SELECTION:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if self.start_btn_rect.collidepoint(event.pos): self.state = STATE_OVERWORLD; return
+                    if self.start_btn_rect.collidepoint(event.pos): 
+                        self.state = STATE_OVERWORLD
+                        return
                     for btn in self.active_buttons:
                         if btn['rect'].collidepoint(event.pos):
                             if btn['type'] == 'tab': self.current_tab = btn['tab']
@@ -206,14 +220,42 @@ class PygameApp:
                                 self.pages[self.current_tab] = min(max_p, self.pages[self.current_tab] + 1)
                             break 
             elif self.state == STATE_OVERWORLD:
-                if event.type == pygame.KEYDOWN and event.key in (pygame.K_SPACE, pygame.K_RETURN):
-                    if pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64).colliderect(self.statue_rect.inflate(50, 50)):
-                        self.state = STATE_BATTLE; self.randomize_enemy(); self.gm.start_word_timer()
+                if event.type == pygame.KEYDOWN:
+                    # 🟢 NEW: ปิด dialogue ด้วย SPACE
+                    if self.showing_dialogue and event.key in (pygame.K_SPACE, pygame.K_RETURN):
+                        self.showing_dialogue = False
+                        self.current_npc = None
+                    # ตรวจสอบ statue
+                    elif event.key in (pygame.K_SPACE, pygame.K_RETURN):
+                        player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
+                        nearby_statue = self.game_map.get_nearby_statue(player_rect)
+                        if nearby_statue:
+                            self.state = STATE_BATTLE
+                            self.randomize_enemy()
+                            self.gm.start_word_timer()
+                            self.current_statue = nearby_statue
+                    # 🟢 NEW: พูดกับ NPC ด้วย E
+                    elif event.key == pygame.K_e:
+                        player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
+                        nearby_npc = self.game_map.get_nearby_npc(player_rect)
+                        if nearby_npc:
+                            self.showing_dialogue = True
+                            self.current_npc = nearby_npc
+                            self.dialogue_timer = 180  # 3 seconds
+                            
             elif self.state == STATE_BATTLE:
                 if event.type == pygame.KEYDOWN:
                     if self.gm.game_over:
                         if event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_ESCAPE):
-                            self.state = STATE_OVERWORLD; self.gm.game_over = False; self.player.hp = self.player_max_hp; self.map_player_pos = [400, 300]
+                            self.state = STATE_OVERWORLD
+                            self.gm.game_over = False
+                            
+                            # 🟢 NEW: เก็บ statue ถ้าชนะ
+                            if hasattr(self, 'current_statue') and self.enemy.current_hp <= 0:
+                                self.current_statue.collected = True
+                                self.statues_collected += 1
+                                
+                            self.player.hp = self.player_max_hp
                     else:
                         if event.unicode.isascii() and event.unicode.isalpha() and len(self.current_guess) < 5:
                             self.current_guess += event.unicode.upper(); self.gm.keystroke_count += 1
@@ -349,25 +391,132 @@ class PygameApp:
     def update_overworld(self):
         keys = pygame.key.get_pressed()
         self.is_moving = False
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]: self.map_player_pos[0] -= self.map_player_speed; self.facing_left_overworld, self.is_moving = True, True
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]: self.map_player_pos[0] += self.map_player_speed; self.facing_left_overworld, self.is_moving = False, True
-        if keys[pygame.K_UP] or keys[pygame.K_w]: self.map_player_pos[1] -= self.map_player_speed; self.is_moving = True
-        if keys[pygame.K_DOWN] or keys[pygame.K_s]: self.map_player_pos[1] += self.map_player_speed; self.is_moving = True
-        self.map_player_pos[0] = max(0, min(self.screen_width - 64, self.map_player_pos[0]))
-        self.map_player_pos[1] = max(0, min(self.screen_height - 64, self.map_player_pos[1]))
+        
+        old_x, old_y = self.map_player_pos[0], self.map_player_pos[1]
+        
+        # 🟢 NEW: Movement with collision detection
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]: 
+            self.map_player_pos[0] -= self.map_player_speed
+            self.facing_left_overworld, self.is_moving = True, True
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]: 
+            self.map_player_pos[0] += self.map_player_speed
+            self.facing_left_overworld, self.is_moving = False, True
+        if keys[pygame.K_UP] or keys[pygame.K_w]: 
+            self.map_player_pos[1] -= self.map_player_speed
+            self.is_moving = True
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]: 
+            self.map_player_pos[1] += self.map_player_speed
+            self.is_moving = True
+        
+        # 🟢 NEW: Check collision
+        if self.game_map.check_collision_at(self.map_player_pos[0], self.map_player_pos[1], 64, 64):
+            self.map_player_pos[0] = old_x
+            self.map_player_pos[1] = old_y
+        
+        # 🟢 NEW: Update camera
+        self.game_map.update_camera(self.map_player_pos[0] + 32, self.map_player_pos[1] + 32, 
+                                    self.screen_width, self.screen_height)
+        
         self.move_timer_overworld = self.move_timer_overworld + 0.2 if self.is_moving else 0
+        
+        # 🟢 NEW: Dialogue timer
+        if self.showing_dialogue:
+            self.dialogue_timer -= 1
+            if self.dialogue_timer <= 0:
+                self.showing_dialogue = False
+                self.current_npc = None
 
     def draw_overworld(self):
-        self.screen.blit(self.overworld_bg, (0, 0))
-        self.screen.blit(self.statue_img, self.statue_rect)
+        # 🟢 NEW: Draw map instead of background
+        self.game_map.draw(self.screen)
+        
+        # 🟢 NEW: Draw player with camera offset
         img = self.player_overworld_equipped_img
-        if self.facing_left_overworld: img = pygame.transform.flip(img, True, False)
+        if self.facing_left_overworld: 
+            img = pygame.transform.flip(img, True, False)
         by = abs(math.sin(self.move_timer_overworld)) * 10 if self.is_moving else 0
-        self.screen.blit(img, (self.map_player_pos[0], self.map_player_pos[1] - by))
-        if pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64).colliderect(self.statue_rect.inflate(50, 50)):
-            prompt_box = pygame.Surface((250, 40)); prompt_box.fill(BLACK); prompt_box.set_alpha(180)
-            self.screen.blit(prompt_box, (self.map_player_pos[0] - 90, self.map_player_pos[1] - 50))
-            self.screen.blit(self.small_font.render("Press SPACE to Battle", True, WHITE), (self.map_player_pos[0] - 80, self.map_player_pos[1] - 40))
+        
+        player_screen_x = self.map_player_pos[0] + self.game_map.camera_offset[0]
+        player_screen_y = self.map_player_pos[1] + self.game_map.camera_offset[1]
+        self.screen.blit(img, (player_screen_x, player_screen_y - by))
+        
+        # 🟢 NEW: Show statue prompt
+        player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
+        nearby_statue = self.game_map.get_nearby_statue(player_rect)
+        if nearby_statue:
+            prompt_box = pygame.Surface((250, 40))
+            prompt_box.fill(BLACK)
+            prompt_box.set_alpha(180)
+            self.screen.blit(prompt_box, (player_screen_x - 90, player_screen_y - 50))
+            self.screen.blit(self.small_font.render("Press SPACE to Battle", True, WHITE), 
+                           (player_screen_x - 80, player_screen_y - 40))
+        
+        # 🟢 NEW: Show NPC prompt
+        nearby_npc = self.game_map.get_nearby_npc(player_rect)
+        if nearby_npc and not self.showing_dialogue:
+            prompt_box = pygame.Surface((200, 40))
+            prompt_box.fill(BLACK)
+            prompt_box.set_alpha(180)
+            self.screen.blit(prompt_box, (player_screen_x - 70, player_screen_y - 50))
+            self.screen.blit(self.small_font.render("Press E to Talk", True, CYAN_400), 
+                           (player_screen_x - 60, player_screen_y - 40))
+        
+        # 🟢 NEW: Show NPC dialogue
+        if self.showing_dialogue and self.current_npc:
+            dialogue_box = pygame.Surface((600, 120))
+            dialogue_box.fill(SLATE_900)
+            dialogue_box.set_alpha(230)
+            
+            box_x = (self.screen_width - 600) // 2
+            box_y = self.screen_height - 150
+            
+            self.screen.blit(dialogue_box, (box_x, box_y))
+            pygame.draw.rect(self.screen, CYAN_400, (box_x, box_y, 600, 120), 3, border_radius=8)
+            
+            npc_name = self.current_npc.data.get('name', 'Stranger')
+            npc_text = self.current_npc.data.get('dialogue', 'Hello there!')
+            
+            name_surf = self.name_font.render(npc_name, True, AMBER_400)
+            self.screen.blit(name_surf, (box_x + 20, box_y + 15))
+            
+            # Word wrap dialogue
+            words = npc_text.split()
+            lines = []
+            current_line = []
+            for word in words:
+                test_line = ' '.join(current_line + [word])
+                if self.small_font.size(test_line)[0] < 550:
+                    current_line.append(word)
+                else:
+                    lines.append(' '.join(current_line))
+                    current_line = [word]
+            if current_line:
+                lines.append(' '.join(current_line))
+            
+            for i, line in enumerate(lines[:2]):  # Max 2 lines
+                text_surf = self.small_font.render(line, True, WHITE)
+                self.screen.blit(text_surf, (box_x + 20, box_y + 50 + i * 25))
+        
+        # 🟢 NEW: Show statue counter
+        statue_text = self.font.render(f"Statues: {self.statues_collected}/{self.total_statues}", True, AMBER_400)
+        pygame.draw.rect(self.screen, SLATE_900, (10, 10, statue_text.get_width() + 20, 50), border_radius=8)
+        pygame.draw.rect(self.screen, AMBER_500, (10, 10, statue_text.get_width() + 20, 50), 2, border_radius=8)
+        self.screen.blit(statue_text, (20, 20))
+        
+        # 🟢 NEW: Check win condition
+        if self.statues_collected >= self.total_statues and self.total_statues > 0:
+            win_overlay = pygame.Surface((self.screen_width, self.screen_height))
+            win_overlay.fill(BLACK)
+            win_overlay.set_alpha(180)
+            self.screen.blit(win_overlay, (0, 0))
+            
+            win_text = self.large_font.render("ALL STATUES COLLECTED!", True, AMBER_400)
+            win_rect = win_text.get_rect(center=(self.screen_width // 2, self.screen_height // 2 - 50))
+            self.screen.blit(win_text, win_rect)
+            
+            sub_text = self.font.render("You are the ultimate word warrior!", True, EMERALD_400)
+            sub_rect = sub_text.get_rect(center=(self.screen_width // 2, self.screen_height // 2 + 20))
+            self.screen.blit(sub_text, sub_rect)
 
     def draw_modern_hp_bar(self, surface, x, y, curr, max_hp, fill, name):
         panel_w = 300
