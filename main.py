@@ -77,7 +77,6 @@ class PygameApp:
         self.player_max_hp = 100
         self.player = Player(hp=self.player_max_hp, base_attack=15)
         
-        # 🟢 NEW: Map System
         self.game_map = GameMap("data/maps/overworld.json")
         self.statues_collected = 0
         self.total_statues = len(self.game_map.get_statues())
@@ -97,7 +96,6 @@ class PygameApp:
         self.yellow_letters = set()
         self.green_letters = [None] * 5
         
-        # 🟢 NEW: NPC Dialogue
         self.showing_dialogue = False
         self.current_npc = None
         self.dialogue_timer = 0
@@ -175,7 +173,6 @@ class PygameApp:
         self.player_battle_img = self.sprite_sheet.get_equipped_image_by_grid(layers, 10)
 
     def setup_overworld(self):
-        # 🟢 NEW: ใช้ spawn point จาก map
         self.map_player_pos = list(self.game_map.spawn_point)
         self.map_player_speed = 4
         self.facing_left_overworld = False
@@ -221,11 +218,9 @@ class PygameApp:
                             break 
             elif self.state == STATE_OVERWORLD:
                 if event.type == pygame.KEYDOWN:
-                    # 🟢 NEW: ปิด dialogue ด้วย SPACE
                     if self.showing_dialogue and event.key in (pygame.K_SPACE, pygame.K_RETURN):
                         self.showing_dialogue = False
                         self.current_npc = None
-                    # ตรวจสอบ statue
                     elif event.key in (pygame.K_SPACE, pygame.K_RETURN):
                         player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
                         nearby_statue = self.game_map.get_nearby_statue(player_rect)
@@ -234,14 +229,13 @@ class PygameApp:
                             self.randomize_enemy()
                             self.gm.start_word_timer()
                             self.current_statue = nearby_statue
-                    # 🟢 NEW: พูดกับ NPC ด้วย E
                     elif event.key == pygame.K_e:
                         player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
                         nearby_npc = self.game_map.get_nearby_npc(player_rect)
                         if nearby_npc:
                             self.showing_dialogue = True
                             self.current_npc = nearby_npc
-                            self.dialogue_timer = 180  # 3 seconds
+                            self.dialogue_timer = 180  
                             
             elif self.state == STATE_BATTLE:
                 if event.type == pygame.KEYDOWN:
@@ -250,7 +244,6 @@ class PygameApp:
                             self.state = STATE_OVERWORLD
                             self.gm.game_over = False
                             
-                            # 🟢 NEW: เก็บ statue ถ้าชนะ
                             if hasattr(self, 'current_statue') and self.enemy.current_hp <= 0:
                                 self.current_statue.collected = True
                                 self.statues_collected += 1
@@ -394,7 +387,6 @@ class PygameApp:
         
         old_x, old_y = self.map_player_pos[0], self.map_player_pos[1]
         
-        # 🟢 NEW: Movement with collision detection
         if keys[pygame.K_LEFT] or keys[pygame.K_a]: 
             self.map_player_pos[0] -= self.map_player_speed
             self.facing_left_overworld, self.is_moving = True, True
@@ -408,18 +400,15 @@ class PygameApp:
             self.map_player_pos[1] += self.map_player_speed
             self.is_moving = True
         
-        # 🟢 NEW: Check collision
         if self.game_map.check_collision_at(self.map_player_pos[0], self.map_player_pos[1], 64, 64):
             self.map_player_pos[0] = old_x
             self.map_player_pos[1] = old_y
         
-        # 🟢 NEW: Update camera
         self.game_map.update_camera(self.map_player_pos[0] + 32, self.map_player_pos[1] + 32, 
                                     self.screen_width, self.screen_height)
         
         self.move_timer_overworld = self.move_timer_overworld + 0.2 if self.is_moving else 0
         
-        # 🟢 NEW: Dialogue timer
         if self.showing_dialogue:
             self.dialogue_timer -= 1
             if self.dialogue_timer <= 0:
@@ -427,10 +416,8 @@ class PygameApp:
                 self.current_npc = None
 
     def draw_overworld(self):
-        # 🟢 NEW: Draw map instead of background
         self.game_map.draw(self.screen)
         
-        # 🟢 NEW: Draw player with camera offset
         img = self.player_overworld_equipped_img
         if self.facing_left_overworld: 
             img = pygame.transform.flip(img, True, False)
@@ -440,7 +427,6 @@ class PygameApp:
         player_screen_y = self.map_player_pos[1] + self.game_map.camera_offset[1]
         self.screen.blit(img, (player_screen_x, player_screen_y - by))
         
-        # 🟢 NEW: Show statue prompt
         player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
         nearby_statue = self.game_map.get_nearby_statue(player_rect)
         if nearby_statue:
@@ -451,7 +437,6 @@ class PygameApp:
             self.screen.blit(self.small_font.render("Press SPACE to Battle", True, WHITE), 
                            (player_screen_x - 80, player_screen_y - 40))
         
-        # 🟢 NEW: Show NPC prompt
         nearby_npc = self.game_map.get_nearby_npc(player_rect)
         if nearby_npc and not self.showing_dialogue:
             prompt_box = pygame.Surface((200, 40))
@@ -461,7 +446,6 @@ class PygameApp:
             self.screen.blit(self.small_font.render("Press E to Talk", True, CYAN_400), 
                            (player_screen_x - 60, player_screen_y - 40))
         
-        # 🟢 NEW: Show NPC dialogue
         if self.showing_dialogue and self.current_npc:
             dialogue_box = pygame.Surface((600, 120))
             dialogue_box.fill(SLATE_900)
@@ -479,7 +463,6 @@ class PygameApp:
             name_surf = self.name_font.render(npc_name, True, AMBER_400)
             self.screen.blit(name_surf, (box_x + 20, box_y + 15))
             
-            # Word wrap dialogue
             words = npc_text.split()
             lines = []
             current_line = []
@@ -493,17 +476,15 @@ class PygameApp:
             if current_line:
                 lines.append(' '.join(current_line))
             
-            for i, line in enumerate(lines[:2]):  # Max 2 lines
+            for i, line in enumerate(lines[:2]):
                 text_surf = self.small_font.render(line, True, WHITE)
                 self.screen.blit(text_surf, (box_x + 20, box_y + 50 + i * 25))
         
-        # 🟢 NEW: Show statue counter
         statue_text = self.font.render(f"Statues: {self.statues_collected}/{self.total_statues}", True, AMBER_400)
         pygame.draw.rect(self.screen, SLATE_900, (10, 10, statue_text.get_width() + 20, 50), border_radius=8)
         pygame.draw.rect(self.screen, AMBER_500, (10, 10, statue_text.get_width() + 20, 50), 2, border_radius=8)
         self.screen.blit(statue_text, (20, 20))
         
-        # 🟢 NEW: Check win condition
         if self.statues_collected >= self.total_statues and self.total_statues > 0:
             win_overlay = pygame.Surface((self.screen_width, self.screen_height))
             win_overlay.fill(BLACK)
