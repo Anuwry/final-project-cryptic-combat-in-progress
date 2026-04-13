@@ -3,7 +3,7 @@ import sys
 import os
 import math
 import random
-from src.config import DATA_DIR, RAW_DATA_DIR, WORDS_DATA_DIR
+from src.config import DATA_DIR, RAW_DATA_DIR, WORDS_DATA_DIR, BASE_DIR
 from src.game_manager import GameManager
 from src.entities import Player, Enemy
 from src.mechanics import WordDictionary, TileBoard
@@ -47,12 +47,10 @@ class SpriteSheet:
     def get_equipped_image_by_grid(self, layers, scale):
         w, h, m = 16, 16, 1
         composite = pygame.Surface((w, h), pygame.SRCALPHA)
-        
         for grid in layers:
             if grid is not None:
                 x, y = grid[0]*(w+m), grid[1]*(h+m)
                 composite.blit(self.sheet.subsurface((x, y, w, h)), (0, 0))
-                
         return pygame.transform.scale(composite, (w * scale, h * scale))
 
 class PygameApp:
@@ -74,14 +72,21 @@ class PygameApp:
         self.gm = GameManager()
         self.dictionary = WordDictionary("normal")
         self.board = TileBoard()
-        self.player = Player(hp=100, base_attack=15)
         
+        self.player_max_hp = 100
+        self.player = Player(hp=self.player_max_hp, base_attack=15)
+        
+        self.floating_texts = []
+        self.p_anim_timer = 0
+        self.p_anim_x = 0
+        self.e_anim_timer = 0
+        self.e_anim_x = 0
         self.battle_float_timer = 0
         self.crit_timer = 0
+        
         self.target_word = self.dictionary.generate_random_word()
         self.current_guess = ""
         self.guess_history = []
-        
         self.absent_letters = set()
         self.yellow_letters = set()
         self.green_letters = [None] * 5
@@ -98,10 +103,15 @@ class PygameApp:
         return surf
 
     def setup_assets(self):
-        self.overworld_bg = pygame.transform.scale(self.load_image_safely("assets/images/map_bg.png", (800, 600), (30, 80, 40)), (800, 600))
-        self.battle_bg = pygame.transform.scale(self.load_image_safely("assets/images/bg.png", (800, 600), (80, 120, 200)), (800, 600))
-        self.statue_img = self.load_image_safely("assets/images/statue.png", (60, 80), (100, 100, 100))
-        self.sprite_sheet = SpriteSheet("assets/images/roguelikeChar_transparent.png")
+        map_bg_path = os.path.join(BASE_DIR, "assets", "images", "map_bg.png")
+        battle_bg_path = os.path.join(BASE_DIR, "assets", "images", "bg.png")
+        statue_path = os.path.join(BASE_DIR, "assets", "images", "statue.png")
+        sprite_path = os.path.join(BASE_DIR, "assets", "images", "roguelikeChar_transparent.png")
+
+        self.overworld_bg = pygame.transform.scale(self.load_image_safely(map_bg_path, (800, 600), (30, 80, 40)), (800, 600))
+        self.battle_bg = pygame.transform.scale(self.load_image_safely(battle_bg_path, (800, 600), (80, 120, 200)), (800, 600))
+        self.statue_img = self.load_image_safely(statue_path, (60, 80), (100, 100, 100))
+        self.sprite_sheet = SpriteSheet(sprite_path)
 
     def generate_box(self, c1, r1, c2, r2):
         return [(c, r) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)]
@@ -111,8 +121,7 @@ class PygameApp:
         for c, r in coords_list:
             img = self.sprite_sheet.get_image_by_grid(c, r, 1)
             rect = img.get_bounding_rect()
-            if rect.width > 0:
-                valid.append((c, r))
+            if rect.width > 0: valid.append((c, r))
         return valid
 
     def setup_selection(self):
@@ -133,11 +142,9 @@ class PygameApp:
         self.tabs = ['base', 'hair', 'hat', 'armor', 'pants', 'weapon', 'shield']
         self.tab_names = ['BODY', 'HAIR', 'HAT', 'ARMOR', 'PANTS', 'WEAPON', 'SHIELD']
         self.current_tab = 'base'
-        
         self.selections = {k: 0 for k in self.tabs}
         self.pages = {k: 0 for k in self.tabs}
         self.items_per_page = 30 
-        
         self.start_btn_rect = pygame.Rect(495, 495, 260, 50)
         self.active_buttons = []
         self.update_player_visuals()
@@ -166,98 +173,67 @@ class PygameApp:
         self.enemy_battle_pos = (550, 100)
         self.player_battle_pos = (80, 230)
 
+    def spawn_floating_text(self, text, x, y, color):
+        self.floating_texts.append({'text': text, 'x': x, 'y': y, 'timer': 45, 'color': color})
+
     def randomize_enemy(self):
         boss_names = ["Corrupted Knight", "Void Fiend", "Cursed Rogue", "Mad Jester", "Shadow Golem", "Dark Mage", "Swamp Terror"]
         self.enemy = Enemy(name=random.choice(boss_names), max_hp=100, attack_power=10)
-        
-        enemy_layers = [
-            random.choice(self.enemy_bases),
-            random.choice(self.options['pants']),
-            random.choice(self.options['armor'][1:]),
-            random.choice(self.options['hair']),
-            random.choice(self.options['hat']),
-            random.choice(self.options['shield']),
-            random.choice(self.options['weapon'][1:])
-        ]
+        enemy_layers = [random.choice(self.enemy_bases), random.choice(self.options['pants']), random.choice(self.options['armor'][1:]),
+                        random.choice(self.options['hair']), random.choice(self.options['hat']), random.choice(self.options['shield']),
+                        random.choice(self.options['weapon'][1:])]
         self.enemy_battle_img = self.sprite_sheet.get_equipped_image_by_grid(enemy_layers, 10)
-        
         self.target_word = self.dictionary.generate_random_word()
-        self.battle_float_timer = 0
-        self.crit_timer = 0
-        self.board.current_attempt = 1
-        self.guess_history = []
-        self.current_guess = ""
-        self.absent_letters = set()
-        self.yellow_letters = set()
+        self.battle_float_timer, self.crit_timer, self.floating_texts = 0, 0, []
+        self.board.current_attempt, self.guess_history, self.current_guess = 1, [], ""
+        self.absent_letters, self.yellow_letters = set(), set()
         self.green_letters = [None] * 5
 
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                self.gm.export_data_to_csv()
-                pygame.quit()
-                sys.exit()
-                
+                self.gm.export_data_to_csv(); pygame.quit(); sys.exit()
             if self.state == STATE_SELECTION:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if self.start_btn_rect.collidepoint(event.pos):
-                        self.state = STATE_OVERWORLD
-                        return
+                    if self.start_btn_rect.collidepoint(event.pos): self.state = STATE_OVERWORLD; return
                     for btn in self.active_buttons:
                         if btn['rect'].collidepoint(event.pos):
-                            if btn['type'] == 'tab':
-                                self.current_tab = btn['tab']
-                            elif btn['type'] == 'item':
-                                self.selections[self.current_tab] = btn['idx']
-                                self.update_player_visuals()
-                            elif btn['type'] == 'prev':
-                                self.pages[self.current_tab] = max(0, self.pages[self.current_tab] - 1)
-                            elif btn['type'] == 'next':
+                            if btn['type'] == 'tab': self.current_tab = btn['tab']
+                            elif btn['type'] == 'item': self.selections[self.current_tab] = btn['idx']; self.update_player_visuals()
+                            elif btn['type'] == 'prev': self.pages[self.current_tab] = max(0, self.pages[self.current_tab] - 1)
+                            elif btn['type'] == 'next': 
                                 max_p = math.ceil(len(self.options[self.current_tab]) / self.items_per_page) - 1
                                 self.pages[self.current_tab] = min(max_p, self.pages[self.current_tab] + 1)
                             break 
-
             elif self.state == STATE_OVERWORLD:
-                if event.type == pygame.KEYDOWN:
-                    if event.key in (pygame.K_SPACE, pygame.K_RETURN):
-                        player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
-                        if player_rect.colliderect(self.statue_rect.inflate(50, 50)):
-                            self.state = STATE_BATTLE
-                            self.randomize_enemy()
-                            self.gm.start_word_timer()
-
+                if event.type == pygame.KEYDOWN and event.key in (pygame.K_SPACE, pygame.K_RETURN):
+                    if pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64).colliderect(self.statue_rect.inflate(50, 50)):
+                        self.state = STATE_BATTLE; self.randomize_enemy(); self.gm.start_word_timer()
             elif self.state == STATE_BATTLE:
-                if event.type == pygame.KEYDOWN and not self.gm.game_over:
-                    if event.unicode.isascii() and event.unicode.isalpha() and len(self.current_guess) < 5:
-                        self.current_guess += event.unicode.upper()
-                        self.gm.keystroke_count += 1
-                    elif event.key == pygame.K_BACKSPACE:
-                        self.current_guess = self.current_guess[:-1]
-                        self.gm.keystroke_count += 1
-                    elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and len(self.current_guess) == 5:
-                        self.gm.keystroke_count += 1
-                        self.submit_guess()
+                if event.type == pygame.KEYDOWN:
+                    if self.gm.game_over:
+                        if event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_ESCAPE):
+                            self.state = STATE_OVERWORLD; self.gm.game_over = False; self.player.hp = self.player_max_hp; self.map_player_pos = [400, 300]
+                    else:
+                        if event.unicode.isascii() and event.unicode.isalpha() and len(self.current_guess) < 5:
+                            self.current_guess += event.unicode.upper(); self.gm.keystroke_count += 1
+                        elif event.key == pygame.K_BACKSPACE: self.current_guess = self.current_guess[:-1]; self.gm.keystroke_count += 1
+                        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and len(self.current_guess) == 5:
+                            self.gm.keystroke_count += 1; self.submit_guess()
 
     def submit_guess(self):
-        guess = self.current_guess
-        self.current_guess = ""
-        colors = self.board.evaluate_colors(guess, self.target_word)
-        self.guess_history.append((guess, colors))
-        
+        guess = self.current_guess; self.current_guess = ""
+        colors = self.board.evaluate_colors(guess, self.target_word); self.guess_history.append((guess, colors))
         for i in range(5):
-            c = guess[i]
-            color = colors[i]
+            c = guess[i]; color = colors[i]
             if color == "GREEN":
                 self.green_letters[i] = c
-                if c in self.yellow_letters:
-                    self.yellow_letters.discard(c)
+                if c in self.yellow_letters: self.yellow_letters.discard(c)
             elif color == "YELLOW":
-                if c not in self.green_letters:
-                    self.yellow_letters.add(c)
+                if c not in self.green_letters: self.yellow_letters.add(c)
             elif color == "GRAY":
-                if c not in self.green_letters and c not in self.yellow_letters:
-                    self.absent_letters.add(c)
-        
+                if c not in self.green_letters and c not in self.yellow_letters: self.absent_letters.add(c)
+                
         if guess == self.target_word:
             self.gm.end_word_timer()
             self.player.combo_count += 1
@@ -265,28 +241,28 @@ class PygameApp:
             self.enemy.take_damage(damage)
             self.gm.record_word_data(self.board.current_attempt - 1, self.player.combo_count, damage)
             
-            if self.player.combo_count > 1:
-                self.crit_timer = 60
-                
-            if self.gm.check_win_condition(self.enemy):
-                self.gm.game_over = True
-            else:
-                self.reset_for_next_word()
+            self.p_anim_timer = 20
+            self.spawn_floating_text(f"-{damage}", self.enemy_battle_pos[0] + 60, self.enemy_battle_pos[1] + 30, RED_500)
+            
+            if self.player.combo_count > 1: self.crit_timer = 60
+            
+            if self.gm.check_win_condition(self.enemy): self.gm.game_over = True
+            else: self.reset_for_next_word()
         else:
-            self.player.combo_count = 0
             if self.board.current_attempt > self.board.grid_size:
+                self.player.combo_count = 0
                 self.enemy.attack_player(self.player)
-                if self.player.hp <= 0:
-                    self.gm.game_over = True
-                else:
-                    self.reset_for_next_word()
+                self.e_anim_timer = 20
+                self.spawn_floating_text(f"-{self.enemy.attack_power}", self.player_battle_pos[0] + 60, self.player_battle_pos[1] + 30, RED_500)
+                
+                if self.player.hp <= 0: self.gm.game_over = True
+                else: self.reset_for_next_word()
 
     def reset_for_next_word(self):
         self.target_word = self.dictionary.generate_random_word()
         self.board.current_attempt = 1
         self.guess_history = []
-        self.absent_letters = set()
-        self.yellow_letters = set()
+        self.absent_letters, self.yellow_letters = set(), set()
         self.green_letters = [None] * 5
         self.gm.start_word_timer()
 
@@ -295,43 +271,34 @@ class PygameApp:
         total_pages = max(1, math.ceil(len(opts) / self.items_per_page))
         cur_page = self.pages[cat]
         
-        header_txt = self.name_font.render(f"SELECT {self.tab_names[self.tabs.index(cat)]}", True, WHITE)
-        self.screen.blit(header_txt, (start_x, start_y))
-        
+        self.screen.blit(self.name_font.render(f"SELECT {self.tab_names[self.tabs.index(cat)]}", True, WHITE), (start_x, start_y))
         box, margin, cols = 44, 10, 5
-        grid_start_y = start_y + 45
+        grid_y = start_y + 45
         start_idx = cur_page * self.items_per_page
         end_idx = min(start_idx + self.items_per_page, len(opts))
         
         for i in range(start_idx, end_idx):
             r, c = (i - start_idx) // cols, (i - start_idx) % cols
-            rect = pygame.Rect(start_x + c*(box+margin), grid_start_y + r*(box+margin), box, box)
-            
-            is_selected = (i == self.selections[cat])
-            border_color = CYAN_400 if is_selected else SLATE_700
-            bg_color = SLATE_800 if is_selected else (20, 30, 50)
-            
-            pygame.draw.rect(self.screen, bg_color, rect, border_radius=8)
-            pygame.draw.rect(self.screen, border_color, rect, 2 if is_selected else 1, border_radius=8)
-            
+            rect = pygame.Rect(start_x + c*(box+margin), grid_y + r*(box+margin), box, box)
+            is_sel = (i == self.selections[cat])
+            pygame.draw.rect(self.screen, SLATE_800 if is_sel else (20, 30, 50), rect, border_radius=8)
+            pygame.draw.rect(self.screen, CYAN_400 if is_sel else SLATE_700, rect, 2 if is_sel else 1, border_radius=8)
             if opts[i]:
                 img = self.sprite_sheet.get_image_by_grid(opts[i][0], opts[i][1], 2)
                 self.screen.blit(img, (rect.x + (box - img.get_width())//2, rect.y + (box - img.get_height())//2))
             else:
                 txt = self.small_font.render("X", True, RED_500)
                 self.screen.blit(txt, (rect.x + (box - txt.get_width())//2, rect.y + (box - txt.get_height())//2))
-                
             self.active_buttons.append({'rect': rect, 'type': 'item', 'cat': cat, 'idx': i})
 
         page_y = 455
-        right_edge = start_x + (cols * box) + ((cols - 1) * margin)
-        
-        btn_next = pygame.Rect(right_edge - 25, page_y, 25, 25)
-        btn_prev = pygame.Rect(right_edge - 55, page_y, 25, 25)
-        
+        center_x = 625 
         page_txt = self.small_font.render(f"PAGE {cur_page+1}/{total_pages}", True, SLATE_400)
-        page_txt_x = right_edge - 65 - page_txt.get_width()
-        self.screen.blit(page_txt, (page_txt_x, page_y + 5))
+        txt_w = page_txt.get_width()
+        self.screen.blit(page_txt, (center_x - txt_w//2, page_y + 5))
+        
+        btn_prev = pygame.Rect(center_x - txt_w//2 - 35, page_y, 25, 25)
+        btn_next = pygame.Rect(center_x + txt_w//2 + 10, page_y, 25, 25)
         
         if cur_page > 0:
             pygame.draw.rect(self.screen, SLATE_700, btn_prev, border_radius=4)
@@ -344,71 +311,48 @@ class PygameApp:
 
     def draw_selection(self):
         self.screen.blit(self.battle_bg, (0, 0))
-        overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        overlay.fill((15, 23, 42, 220)) 
-        self.screen.blit(overlay, (0, 0))
-        
+        ov = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+        ov.fill((15, 23, 42, 220))
+        self.screen.blit(ov, (0, 0))
         self.active_buttons = []
         
-        title = self.large_font.render("A R M O R Y", True, CYAN_400)
-        self.screen.blit(title, (50, 40))
-        subtitle = self.small_font.render("CUSTOMIZE YOUR HERO", True, SLATE_400)
-        self.screen.blit(subtitle, (55, 90))
+        self.screen.blit(self.large_font.render("ARMORY", True, CYAN_400), (50, 40))
+        self.screen.blit(self.small_font.render("CUSTOMIZE YOUR HERO", True, SLATE_400), (55, 90))
         
-        pedestal_x, pedestal_y = 175, 400
-        pygame.draw.ellipse(self.screen, SLATE_800, (pedestal_x - 80, pedestal_y, 160, 30))
-        pygame.draw.ellipse(self.screen, CYAN_500, (pedestal_x - 70, pedestal_y + 5, 140, 20), 2)
+        px, py = 175, 400
+        pygame.draw.ellipse(self.screen, SLATE_800, (px - 80, py, 160, 30))
+        pygame.draw.ellipse(self.screen, CYAN_500, (px - 70, py + 5, 140, 20), 2)
+        self.screen.blit(self.player_preview_img, (px - self.player_preview_img.get_width()//2, py - self.player_preview_img.get_height() + 20))
         
-        img_w = self.player_preview_img.get_width()
-        img_h = self.player_preview_img.get_height()
-        self.screen.blit(self.player_preview_img, (pedestal_x - img_w//2, pedestal_y - img_h + 20))
+        panel = pygame.Rect(330, 40, 440, 530)
+        pygame.draw.rect(self.screen, (15, 23, 42, 180), panel, border_radius=16)
+        pygame.draw.rect(self.screen, SLATE_700, panel, 2, border_radius=16)
         
-        panel_rect = pygame.Rect(330, 40, 440, 530)
-        pygame.draw.rect(self.screen, (15, 23, 42, 180), panel_rect, border_radius=16)
-        pygame.draw.rect(self.screen, SLATE_700, panel_rect, 2, border_radius=16)
-        
-        tab_y = 65
+        ty = 65
         for i, tab in enumerate(self.tabs):
-            is_active = (self.current_tab == tab)
-            rect = pygame.Rect(345, tab_y, 120, 48)
-            
-            if is_active:
+            is_act = (self.current_tab == tab)
+            rect = pygame.Rect(345, ty, 120, 48)
+            if is_act:
                 pygame.draw.rect(self.screen, SLATE_800, rect, border_radius=8)
                 pygame.draw.rect(self.screen, CYAN_400, (rect.x, rect.y, 4, rect.height), border_top_left_radius=8, border_bottom_left_radius=8)
-                color = CYAN_400
-            else:
-                color = SLATE_400
-                
-            text = self.small_font.render(self.tab_names[i], True, color)
-            self.screen.blit(text, (rect.x + 15, rect.y + 16))
+            self.screen.blit(self.small_font.render(self.tab_names[i], True, CYAN_400 if is_act else SLATE_400), (rect.x + 15, rect.y + 16))
             self.active_buttons.append({'rect': rect, 'type': 'tab', 'tab': tab})
-            tab_y += 62
+            ty += 62
             
         pygame.draw.line(self.screen, SLATE_700, (475, 60), (475, 540), 2)
-        
         self.draw_category_ui(self.current_tab, 495, 60)
-
+        
         pygame.draw.rect(self.screen, CYAN_500, self.start_btn_rect, border_radius=12)
-        start_text = self.btn_font.render("START JOURNEY >", True, BLACK)
-        self.screen.blit(start_text, (self.start_btn_rect.centerx - start_text.get_width()//2, 
-                                      self.start_btn_rect.centery - start_text.get_height()//2))
+        btn_txt = self.btn_font.render("START JOURNEY >", True, BLACK)
+        self.screen.blit(btn_txt, (self.start_btn_rect.centerx - btn_txt.get_width()//2, self.start_btn_rect.centery - btn_txt.get_height()//2))
 
     def update_overworld(self):
         keys = pygame.key.get_pressed()
         self.is_moving = False
-        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
-            self.map_player_pos[0] -= self.map_player_speed
-            self.facing_left_overworld, self.is_moving = True, True
-        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
-            self.map_player_pos[0] += self.map_player_speed
-            self.facing_left_overworld, self.is_moving = False, True
-        if keys[pygame.K_UP] or keys[pygame.K_w]:
-            self.map_player_pos[1] -= self.map_player_speed
-            self.is_moving = True
-        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
-            self.map_player_pos[1] += self.map_player_speed
-            self.is_moving = True
-
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]: self.map_player_pos[0] -= self.map_player_speed; self.facing_left_overworld, self.is_moving = True, True
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]: self.map_player_pos[0] += self.map_player_speed; self.facing_left_overworld, self.is_moving = False, True
+        if keys[pygame.K_UP] or keys[pygame.K_w]: self.map_player_pos[1] -= self.map_player_speed; self.is_moving = True
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]: self.map_player_pos[1] += self.map_player_speed; self.is_moving = True
         self.map_player_pos[0] = max(0, min(self.screen_width - 64, self.map_player_pos[0]))
         self.map_player_pos[1] = max(0, min(self.screen_height - 64, self.map_player_pos[1]))
         self.move_timer_overworld = self.move_timer_overworld + 0.2 if self.is_moving else 0
@@ -416,129 +360,139 @@ class PygameApp:
     def draw_overworld(self):
         self.screen.blit(self.overworld_bg, (0, 0))
         self.screen.blit(self.statue_img, self.statue_rect)
-        
         img = self.player_overworld_equipped_img
-        if self.facing_left_overworld:
-            img = pygame.transform.flip(img, True, False)
-        bounce_y = abs(math.sin(self.move_timer_overworld)) * 10 if self.is_moving else 0
-        self.screen.blit(img, (self.map_player_pos[0], self.map_player_pos[1] - bounce_y))
-
+        if self.facing_left_overworld: img = pygame.transform.flip(img, True, False)
+        by = abs(math.sin(self.move_timer_overworld)) * 10 if self.is_moving else 0
+        self.screen.blit(img, (self.map_player_pos[0], self.map_player_pos[1] - by))
         if pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64).colliderect(self.statue_rect.inflate(50, 50)):
             prompt_box = pygame.Surface((250, 40)); prompt_box.fill(BLACK); prompt_box.set_alpha(180)
             self.screen.blit(prompt_box, (self.map_player_pos[0] - 90, self.map_player_pos[1] - 50))
             self.screen.blit(self.small_font.render("Press SPACE to Battle", True, WHITE), (self.map_player_pos[0] - 80, self.map_player_pos[1] - 40))
 
-    def draw_modern_hp_bar(self, surface, x, y, current_hp, max_hp, fill_color, name):
-        panel = pygame.Surface((280, 80), pygame.SRCALPHA)
-        pygame.draw.rect(panel, (15, 23, 42, 220), (0, 0, 280, 80), border_radius=12)
-        pygame.draw.rect(panel, SLATE_700, (0, 0, 280, 80), 2, border_radius=12)
-        surface.blit(panel, (x, y))
-
-        name_txt = self.name_font.render(name, True, WHITE)
-        surface.blit(name_txt, (x + 15, y + 15))
+    def draw_modern_hp_bar(self, surface, x, y, curr, max_hp, fill, name):
+        panel_w = 300
+        pygame.draw.rect(surface, (15, 23, 42, 220), (x, y, panel_w, 80), border_radius=12)
         
-        bar_x, bar_y, bar_w, bar_h = x + 15, y + 50, 250, 16
-        pygame.draw.rect(surface, BLACK, (bar_x, bar_y, bar_w, bar_h), border_radius=8)
+        name_surf = self.name_font.render(name, True, WHITE)
+        surface.blit(name_surf, (x + 15, y + 20))
         
-        ratio = max(0.0, min(1.0, current_hp / max_hp))
-        if ratio > 0:
-            pygame.draw.rect(surface, fill_color, (bar_x, bar_y, int(bar_w * ratio), bar_h), border_radius=8)
+        ratio = max(0.0, min(1.0, curr / max_hp))
+        pct = int(ratio * 100)
+        txt = self.small_font.render(f"{curr}/{max_hp} ({pct}%)", True, SLATE_400)
+        surface.blit(txt, (x + panel_w - 15 - txt.get_width(), y + 30))
         
-        hp_txt = self.small_font.render("HP", True, WHITE)
-        surface.blit(hp_txt, (bar_x + 5, bar_y + 1))
+        bx, by, bw, bh = x + 15, y + 50, panel_w - 30, 16
+        pygame.draw.rect(surface, BLACK, (bx, by, bw, bh), border_radius=8)
+        if ratio > 0: pygame.draw.rect(surface, fill, (bx, by, int(bw * ratio), bh), border_radius=8)
 
     def draw_battle(self):
         self.screen.blit(self.battle_bg, (0, 0))
-        overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        overlay.fill((15, 23, 42, 140))
-        self.screen.blit(overlay, (0, 0))
-
+        
+        if self.p_anim_timer > 0:
+            if self.p_anim_timer > 10: self.p_anim_x += 15
+            else: self.p_anim_x -= 15
+            self.p_anim_timer -= 1
+        else: self.p_anim_x = 0
+            
+        if self.e_anim_timer > 0:
+            if self.e_anim_timer > 10: self.e_anim_x -= 15
+            else: self.e_anim_x += 15
+            self.e_anim_timer -= 1
+        else: self.e_anim_x = 0
+            
         self.battle_float_timer += 0.05
-        float_off = math.sin(self.battle_float_timer) * 8
-        self.screen.blit(self.enemy_battle_img, (self.enemy_battle_pos[0], self.enemy_battle_pos[1] + float_off))
-        self.screen.blit(self.player_battle_img, (self.player_battle_pos[0], self.player_battle_pos[1] - float_off))
+        fo = math.sin(self.battle_float_timer) * 8
+        self.screen.blit(self.enemy_battle_img, (self.enemy_battle_pos[0] + self.e_anim_x, self.enemy_battle_pos[1] + fo))
+        self.screen.blit(self.player_battle_img, (self.player_battle_pos[0] + self.p_anim_x, self.player_battle_pos[1] - fo))
         
         self.draw_modern_hp_bar(self.screen, 40, 30, self.enemy.current_hp, self.enemy.max_hp, RED_500, self.enemy.name)
-        self.draw_modern_hp_bar(self.screen, 480, 320, self.player.hp, 100, EMERALD_500, "Player")
+        self.draw_modern_hp_bar(self.screen, 460, 320, self.player.hp, self.player_max_hp, EMERALD_500, "Player")
         
+        if self.player.combo_count > 0:
+            bonus_dmg = int(self.player.combo_count * 20)
+            combo_txt = self.btn_font.render(f"COMBO x{self.player.combo_count} (ATK +{bonus_dmg}%)", True, AMBER_400)
+            self.screen.blit(combo_txt, (460, 295))
+        
+        for t in self.floating_texts[:]:
+            self.screen.blit(self.combo_font.render(str(t['text']), True, t['color']), (t['x'], t['y']))
+            t['y'] -= 2; t['timer'] -= 1
+            if t['timer'] <= 0: self.floating_texts.remove(t)
+            
         if self.crit_timer > 0:
             crit_txt = self.combo_font.render("CRITICAL!", True, AMBER_500)
-            crit_shadow = self.combo_font.render("CRITICAL!", True, BLACK)
-            
             c_x_crit = self.enemy_battle_pos[0] + 80 - crit_txt.get_width() // 2
-            c_y_crit = self.enemy_battle_pos[1] - 20 - ((60 - self.crit_timer) * 0.5)
-            
-            self.screen.blit(crit_shadow, (c_x_crit + 2, c_y_crit + 2))
+            c_y_crit = self.enemy_battle_pos[1] - 40 - ((60 - self.crit_timer) * 0.5)
+            self.screen.blit(self.combo_font.render("CRITICAL!", True, BLACK), (c_x_crit + 2, c_y_crit + 2))
             self.screen.blit(crit_txt, (c_x_crit, c_y_crit))
-            
             self.crit_timer -= 1 
 
         board_start_y = 440
-        hud_bg = pygame.Surface((self.screen_width, self.screen_height - board_start_y), pygame.SRCALPHA)
-        hud_bg.fill((15, 23, 42, 240))
-        self.screen.blit(hud_bg, (0, board_start_y))
-        pygame.draw.line(self.screen, SLATE_700, (0, board_start_y), (self.screen_width, board_start_y), 2)
+        pygame.draw.rect(self.screen, (15, 23, 42, 240), (0, board_start_y, 800, 160))
+        pygame.draw.line(self.screen, SLATE_700, (0, board_start_y), (800, board_start_y), 2)
+
+        if self.board.current_attempt >= 4 and not self.gm.game_over:
+            hint = f"Ehm.. maybe it's: '{self.dictionary.get_current_hint()}'"
+            if len(hint) > 75: hint = hint[:72] + "..."
+            hs = self.small_font.render(hint, True, BLACK)
+            br = hs.get_rect(midbottom=(self.player_battle_pos[0] + 120, self.player_battle_pos[1] - 20))
+            pygame.draw.rect(self.screen, WHITE, br.inflate(20, 15), border_radius=10)
+            pygame.draw.rect(self.screen, EMERALD_500, br.inflate(20, 15), 2, border_radius=10)
+            self.screen.blit(hs, br)
 
         self.screen.blit(self.small_font.render("ABSENT", True, SLATE_700), (40, board_start_y + 15))
         absent_x, absent_y = 40, board_start_y + 40
         for i, char in enumerate(sorted(list(self.absent_letters))):
             r, c = i // 6, i % 6
             pygame.draw.rect(self.screen, BLACK, (absent_x + c*25, absent_y + r*25, 20, 20), border_radius=4)
-            txt = self.small_font.render(char, True, SLATE_700)
-            self.screen.blit(txt, (absent_x + c*25 + 6, absent_y + r*25 + 3))
+            self.screen.blit(self.small_font.render(char, True, SLATE_700), (absent_x + c*25 + 6, absent_y + r*25 + 3))
 
-        box, margin = 50, 10
-        center_x = (self.screen_width - ((box * 5) + (margin * 4))) // 2
-        center_y = board_start_y + 45
-        
+        box, m = 50, 10
+        cx = (800 - (box*5 + m*4)) // 2
+        cy = board_start_y + 45
         for col in range(5):
-            x = center_x + (col * (box + margin))
+            x = cx + col * (box + m)
             char = self.current_guess[col] if col < len(self.current_guess) else ""
             is_active = (col == len(self.current_guess) and not self.gm.game_over)
-            
-            bg_color = SLATE_800 if char else BLACK
-            border_color = CYAN_400 if is_active else SLATE_700
-            
-            pygame.draw.rect(self.screen, bg_color, (x, center_y, box, box), border_radius=8)
-            pygame.draw.rect(self.screen, border_color, (x, center_y, box, box), 2 if not is_active else 3, border_radius=8)
+            pygame.draw.rect(self.screen, SLATE_800 if char else BLACK, (x, cy, box, box), border_radius=8)
+            pygame.draw.rect(self.screen, CYAN_400 if is_active else SLATE_700, (x, cy, box, box), 2 if not is_active else 3, border_radius=8)
             if char:
-                txt = self.font.render(char, True, WHITE)
-                self.screen.blit(txt, txt.get_rect(center=(x + box//2, center_y + box//2)))
-                
+                t = self.font.render(char, True, WHITE)
+                self.screen.blit(t, t.get_rect(center=(x+box//2, cy+box//2)))
+
         self.screen.blit(self.small_font.render("BEST KNOWN", True, EMERALD_500), (580, board_start_y + 15))
         right_x, right_y = 580, board_start_y + 40
         for i in range(5):
             rx = right_x + i*30
             c_char = self.green_letters[i]
             pygame.draw.rect(self.screen, EMERALD_500 if c_char else SLATE_800, (rx, right_y, 25, 25), border_radius=4)
-            if c_char:
-                txt = self.small_font.render(c_char, True, BLACK)
-                self.screen.blit(txt, (rx + 7, right_y + 5))
+            if c_char: self.screen.blit(self.small_font.render(c_char, True, BLACK), (rx + 7, right_y + 5))
         
         if self.yellow_letters:
             self.screen.blit(self.small_font.render("PRESENT:", True, AMBER_500), (right_x, right_y + 40))
             for i, char in enumerate(sorted(list(self.yellow_letters))):
                 pygame.draw.rect(self.screen, AMBER_500, (right_x + 75 + i*25, right_y + 35, 20, 20), border_radius=4)
-                txt = self.small_font.render(char, True, BLACK)
-                self.screen.blit(txt, (right_x + 75 + i*25 + 5, right_y + 38))
+                self.screen.blit(self.small_font.render(char, True, BLACK), (right_x + 75 + i*25 + 5, right_y + 38))
 
         if self.gm.game_over:
-            msg, color = ("VICTORY!", EMERALD_400) if self.enemy.current_hp <= 0 else ("DEFEATED!", RED_500)
-            txt = self.large_font.render(msg, True, color)
-            self.screen.blit(txt, ((self.screen_width - txt.get_width())//2, board_start_y - 60))
+            msg = "VICTORY!" if self.enemy.current_hp <= 0 else "DEFEATED!"
+            msg_color = EMERALD_400 if msg == "VICTORY!" else RED_500
+            
+            txt_surface = self.large_font.render(msg, True, msg_color)
+            txt_rect = txt_surface.get_rect(center=(self.screen_width // 2, 280))
+            self.screen.blit(txt_surface, txt_rect)
+            
+            sub_txt = self.small_font.render("Press SPACE to return", True, WHITE)
+            sub_rect = sub_txt.get_rect(center=(self.screen_width // 2, 330))
+            self.screen.blit(sub_txt, sub_rect)
 
     def run(self):
         clock = pygame.time.Clock()
         while True:
             self.handle_events()
             if self.state == STATE_SELECTION: self.draw_selection()
-            elif self.state == STATE_OVERWORLD:
-                self.update_overworld()
-                self.draw_overworld()
+            elif self.state == STATE_OVERWORLD: self.update_overworld(); self.draw_overworld()
             elif self.state == STATE_BATTLE: self.draw_battle()
-            pygame.display.flip()
-            clock.tick(60)
+            pygame.display.flip(); clock.tick(60)
 
 if __name__ == "__main__":
-    app = PygameApp()
-    app.run()
+    app = PygameApp(); app.run()
