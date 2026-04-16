@@ -119,8 +119,10 @@ class PygameApp:
         self.setup_selection()
         self.setup_overworld()
         
+        # 🟢 แจกไอเทมเริ่มเกม
         self.add_item('compass', 'Compass', 'Teleport to Sanctuary', 1)
         self.add_item('potion', 'Health Potion', 'Heals 50 HP', 2)
+        self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 3) 
 
     def load_image_safely(self, path, size, fallback_color):
         if os.path.exists(path): return pygame.transform.scale(pygame.image.load(path).convert_alpha(), size)
@@ -241,7 +243,6 @@ class PygameApp:
         self.game_map.camera_offset = [0, 0]
         self.game_map.target_camera_offset = [0, 0]
 
-    # 🟢 เพิ่มการตั้งค่า font_type สำหรับข้อความแจ้งเตือนไอเทม
     def spawn_floating_text(self, text, x, y, color, font_type='large'):
         self.floating_texts.append({'text': text, 'x': x, 'y': y, 'timer': 45, 'color': color, 'font_type': font_type})
 
@@ -286,12 +287,11 @@ class PygameApp:
         item = self.inventory[hotbar_idx]
         if not item: return
         
-        # 🟢 คำนวณให้ข้อความไปโผล่ตรงกลางช่อง Hotbar ที่เรากดใช้เป๊ะๆ
         slot_size = 40
         padding = 6
         start_x = (800 - (5 * slot_size + 4 * padding)) // 2
         px = start_x + hotbar_idx * (slot_size + padding) + (slot_size // 2)
-        py = 520 # เหนือ Hotbar ขึ้นมาเล็กน้อย
+        py = 520 
         
         if item['id'] == 'compass':
             if self.state == STATE_OVERWORLD:
@@ -349,7 +349,7 @@ class PygameApp:
                 if hasattr(self, 'game_map'): self.game_map.save_map()
                 self.gm.export_data_to_csv(); pygame.quit(); sys.exit()
                 
-            if self.state in [STATE_OVERWORLD, STATE_BATTLE]:
+            if self.state in [STATE_OVERWORLD]: # เปิดให้จัดเรียงกระเป๋าแค่ตอนเดิน
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     slot_idx = self.get_hovered_slot(event.pos)
                     if slot_idx is not None and self.inventory[slot_idx]:
@@ -447,10 +447,34 @@ class PygameApp:
                     else:
                         if event.key == pygame.K_ESCAPE:
                             self.state = STATE_OVERWORLD
-                        elif event.key == pygame.K_e:
-                            self.show_inventory = not self.show_inventory
-                        elif pygame.K_1 <= event.key <= pygame.K_5:
-                            self.use_item(event.key - pygame.K_1)
+                        # 🟢 คีย์ลัดตอนสู้: กด 1 หายากินอัตโนมัติ
+                        elif event.key == pygame.K_1:
+                            potion_slot = next((item for item in self.inventory if item and item['id'] == 'potion'), None)
+                            if potion_slot:
+                                if self.player.hp < self.player_max_hp:
+                                    self.player.hp = min(self.player_max_hp, self.player.hp + 50)
+                                    self.spawn_floating_text("+50 HP", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, EMERALD_400)
+                                    potion_slot['qty'] -= 1
+                                    if potion_slot['qty'] <= 0: self.inventory[self.inventory.index(potion_slot)] = None
+                                else:
+                                    self.spawn_floating_text("HP is Full", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, WHITE, 'small')
+                            else:
+                                self.spawn_floating_text("No Potions", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, RED_500, 'small')
+                        
+                        # 🟢 คีย์ลัดตอนสู้: กด 2 หาคัมภีร์ใบ้คำอัตโนมัติ
+                        elif event.key == pygame.K_2:
+                            scroll_slot = next((item for item in self.inventory if item and item['id'] == 'scroll'), None)
+                            if scroll_slot:
+                                for idx, c in enumerate(self.target_word):
+                                    if self.green_letters[idx] is None:
+                                        self.green_letters[idx] = c
+                                        self.spawn_floating_text("Hint Used!", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, CYAN_400, 'small')
+                                        scroll_slot['qty'] -= 1
+                                        if scroll_slot['qty'] <= 0: self.inventory[self.inventory.index(scroll_slot)] = None
+                                        break
+                            else:
+                                self.spawn_floating_text("No Scrolls", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, RED_500, 'small')
+                                
                         elif event.unicode.isascii() and event.unicode.isalpha() and len(self.current_guess) < 5:
                             self.current_guess += event.unicode.upper(); self.gm.keystroke_count += 1
                         elif event.key == pygame.K_BACKSPACE: self.current_guess = self.current_guess[:-1]; self.gm.keystroke_count += 1
@@ -783,15 +807,12 @@ class PygameApp:
 
         self.draw_inventory_ui(self.screen)
         
-        # 🟢 เรนเดอร์ข้อความลอยแบบมีชาโดว์ ให้อ่านง่ายทะลุทุกสีพื้น
         for t in self.floating_texts[:]:
             f = self.small_font if t.get('font_type') == 'small' else self.combo_font
             txt_str = str(t['text'])
-            
             shadow = f.render(txt_str, True, BLACK)
             self.screen.blit(shadow, (t['x'] + 1, t['y'] + 1))
             self.screen.blit(f.render(txt_str, True, t['color']), (t['x'], t['y']))
-            
             t['y'] -= 1.5 if t.get('font_type') == 'small' else 2
             t['timer'] -= 1
             if t['timer'] <= 0: self.floating_texts.remove(t)
@@ -913,8 +934,12 @@ class PygameApp:
         pygame.draw.rect(battle_surf, (15, 23, 42, 240), (0, board_start_y, 800, 160))
         pygame.draw.line(battle_surf, SLATE_700, (0, board_start_y), (800, board_start_y), 2)
 
+        # 🟢 UI คำแนะนำเมนูของฉากต่อสู้
+        total_potions = sum([item['qty'] for item in self.inventory if item and item['id'] == 'potion'])
+        total_scrolls = sum([item['qty'] for item in self.inventory if item and item['id'] == 'scroll'])
+        
         if not self.gm.game_over:
-            battle_surf.blit(self.small_font.render(f"Press 1-5 to use Hotbar Items | [ESC] Flee", True, SLATE_400), (20, board_start_y - 25))
+            battle_surf.blit(self.small_font.render(f"[1] Potion ({total_potions})   [2] Hint Scroll ({total_scrolls})   [ESC] Flee", True, SLATE_400), (20, board_start_y - 25))
 
         if self.board.current_attempt >= 4 and not self.gm.game_over:
             hint = f"Ehm.. maybe it's: '{self.dictionary.get_current_hint()}'"
@@ -972,8 +997,6 @@ class PygameApp:
             battle_surf.blit(sub_txt, sub_rect)
 
         self.screen.blit(battle_surf, (shake_x, shake_y))
-        
-        self.draw_inventory_ui(self.screen)
 
     def run(self):
         clock = pygame.time.Clock()
