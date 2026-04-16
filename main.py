@@ -175,9 +175,8 @@ class PygameApp:
         return valid
 
     def setup_selection(self):
-        npc_bases = self.generate_box(0, 0, 1, 11)
         player_bases = [(1, 0), (1, 1), (1, 2)]
-        self.enemy_bases = [b for b in npc_bases if b not in player_bases]
+        self.enemy_bases = player_bases
         
         self.options = {
             'base': player_bases, 'pants': [None] + self.filter_empty(self.generate_box(2, 0, 4, 9)),
@@ -290,41 +289,39 @@ class PygameApp:
         padding = 6
         start_x = (800 - (5 * slot_size + 4 * padding)) // 2
         px = start_x + hotbar_idx * (slot_size + padding) + (slot_size // 2)
-        py = 520 
+        py = 515 
         
         if item['id'] == 'compass':
             if self.state == STATE_OVERWORLD:
                 if self.realm_x == 0 and self.realm_y == 0:
-                    self.spawn_floating_text("Already at Sanctuary", px - 75, py, WHITE, 'small')
+                    self.spawn_floating_text("Already at Sanctuary", px, py, WHITE, 'tiny')
                 else:
                     self.change_realm(0, 0, 'teleport')
-                    npx = self.map_player_pos[0] + self.game_map.camera_offset[0] + 32
-                    npy = self.map_player_pos[1] + self.game_map.camera_offset[1] - 20
-                    self.spawn_floating_text("Returned to Sanctuary", npx - 80, npy, WHITE, 'small')
+                    self.spawn_floating_text("Teleported!", px, py, WHITE, 'tiny')
             else:
-                self.spawn_floating_text("Can't use now", px - 50, py, RED_500, 'small')
+                self.spawn_floating_text("Can't use now", px, py, RED_500, 'tiny')
                 
         elif item['id'] == 'potion':
             if self.player.hp < self.player_max_hp:
                 heal_amount = 50
                 self.player.hp = min(self.player_max_hp, self.player.hp + heal_amount)
-                self.spawn_floating_text(f"+{heal_amount} HP", px - 25, py, EMERALD_400, 'small')
+                self.spawn_floating_text(f"+{heal_amount} HP", px, py, EMERALD_400, 'tiny')
                 item['qty'] -= 1
                 if item['qty'] <= 0: self.inventory[hotbar_idx] = None
             else:
-                self.spawn_floating_text("HP is Full", px - 40, py, WHITE, 'small')
+                self.spawn_floating_text("HP is Full", px, py, WHITE, 'tiny')
                 
         elif item['id'] == 'scroll':
             if self.state == STATE_BATTLE and not self.gm.game_over:
                 for idx, c in enumerate(self.target_word):
                     if self.green_letters[idx] is None:
                         self.green_letters[idx] = c
-                        self.spawn_floating_text("Hint Used!", px - 40, py, CYAN_400, 'small')
+                        self.spawn_floating_text("Hint Used!", px, py, CYAN_400, 'tiny')
                         item['qty'] -= 1
                         if item['qty'] <= 0: self.inventory[hotbar_idx] = None
                         break
             else:
-                self.spawn_floating_text("Can't use now", px - 50, py, RED_500, 'small')
+                self.spawn_floating_text("Can't use now", px, py, RED_500, 'tiny')
 
     def get_hovered_slot(self, pos):
         mx, my = pos
@@ -449,32 +446,35 @@ class PygameApp:
                         if event.key == pygame.K_ESCAPE:
                             self.state = STATE_OVERWORLD
                         elif event.key == pygame.K_1:
+                            px = self.player_battle_pos[0] + 80 + random.randint(-20, 20)
+                            py = self.player_battle_pos[1] - 20 + random.randint(-15, 15)
                             potion_idx = next((i for i, item in enumerate(self.inventory) if item and item['id'] == 'potion'), None)
                             if potion_idx is not None:
                                 if self.player.hp < self.player_max_hp:
-                                    heal_amount = 50
-                                    self.player.hp = min(self.player_max_hp, self.player.hp + heal_amount)
-                                    self.spawn_floating_text(f"+{heal_amount} HP", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, EMERALD_400, 'small')
+                                    self.player.hp = min(self.player_max_hp, self.player.hp + 50)
+                                    self.spawn_floating_text("+50 HP", px, py, EMERALD_400, 'small')
                                     self.inventory[potion_idx]['qty'] -= 1
                                     if self.inventory[potion_idx]['qty'] <= 0: self.inventory[potion_idx] = None
                                 else:
-                                    self.spawn_floating_text("HP is Full", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, WHITE, 'small')
+                                    self.spawn_floating_text("HP is Full", px, py, WHITE, 'small')
                             else:
-                                self.spawn_floating_text("No Potions", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, RED_500, 'small')
+                                self.spawn_floating_text("No Potions", px, py, RED_500, 'small')
                         
                         elif event.key == pygame.K_2:
+                            px = self.player_battle_pos[0] + 80 + random.randint(-20, 20)
+                            py = self.player_battle_pos[1] - 20 + random.randint(-15, 15)
                             scroll_idx = next((i for i, item in enumerate(self.inventory) if item and item['id'] == 'scroll'), None)
                             if scroll_idx is not None:
                                 for idx, c in enumerate(self.target_word):
                                     if self.green_letters[idx] is None:
                                         self.green_letters[idx] = c
-                                        self.spawn_floating_text("Hint Used!", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, CYAN_400, 'small')
+                                        self.spawn_floating_text("Hint Used!", px, py, CYAN_400, 'small')
                                         self.inventory[scroll_idx]['qty'] -= 1
                                         if self.inventory[scroll_idx]['qty'] <= 0: self.inventory[scroll_idx] = None
                                         break
                             else:
-                                self.spawn_floating_text("No Scrolls", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, RED_500, 'small')
-                        
+                                self.spawn_floating_text("No Scrolls", px, py, RED_500, 'small')
+                                
                         elif event.unicode.isascii() and event.unicode.isalpha() and len(self.current_guess) < 5:
                             self.current_guess += event.unicode.upper(); self.gm.keystroke_count += 1
                         elif event.key == pygame.K_BACKSPACE: self.current_guess = self.current_guess[:-1]; self.gm.keystroke_count += 1
@@ -503,7 +503,11 @@ class PygameApp:
             
             self.p_anim_timer = 20
             self.trigger_shake(8, 15) 
-            self.spawn_floating_text(f"-{damage}", self.enemy_battle_pos[0] + 60, self.enemy_battle_pos[1] + 30, RED_500)
+            
+            px = self.enemy_battle_pos[0] + 80 + random.randint(-20, 20)
+            py = self.enemy_battle_pos[1] - 20 + random.randint(-15, 15)
+            self.spawn_floating_text(f"-{damage}", px, py, RED_500)
+            
             if self.player.combo_count > 1: self.crit_timer = 60
             
             if self.gm.check_win_condition(self.enemy): self.gm.game_over = True
@@ -514,7 +518,11 @@ class PygameApp:
                 self.enemy.attack_player(self.player)
                 self.e_anim_timer = 20
                 self.trigger_shake(15, 20) 
-                self.spawn_floating_text(f"-{self.enemy.attack_power}", self.player_battle_pos[0] + 60, self.player_battle_pos[1] + 30, RED_500)
+                
+                px = self.player_battle_pos[0] + 80 + random.randint(-20, 20)
+                py = self.player_battle_pos[1] - 20 + random.randint(-15, 15)
+                self.spawn_floating_text(f"-{self.enemy.attack_power}", px, py, RED_500)
+                
                 if self.player.hp <= 0: self.gm.game_over = True
                 else: self.reset_for_next_word()
 
@@ -649,13 +657,8 @@ class PygameApp:
             target_ry -= 1; will_change = True; exit_side = 'top'
 
         if will_change:
-            target_file = os.path.join(BASE_DIR, f"data/maps/realm_{target_rx}_{target_ry}.json")
-            if os.path.exists(target_file):
-                self.change_realm(target_rx, target_ry, exit_side)
-                return
-            else:
-                self.map_player_pos[0] = old_x
-                self.map_player_pos[1] = old_y
+            self.change_realm(target_rx, target_ry, exit_side)
+            return
         
         self.game_map.update_camera(self.map_player_pos[0] + 32, self.map_player_pos[1] + 32, 
                                     self.screen_width, self.screen_height)
@@ -810,12 +813,21 @@ class PygameApp:
         self.draw_inventory_ui(self.screen)
         
         for t in self.floating_texts[:]:
-            f = self.small_font if t.get('font_type') == 'small' else self.combo_font
+            if t.get('font_type') == 'tiny': f = self.tiny_font
+            elif t.get('font_type') == 'small': f = self.small_font
+            else: f = self.combo_font
+            
             txt_str = str(t['text'])
+            txt_surf = f.render(txt_str, True, t['color'])
             shadow = f.render(txt_str, True, BLACK)
-            self.screen.blit(shadow, (t['x'] + 1, t['y'] + 1))
-            self.screen.blit(f.render(txt_str, True, t['color']), (t['x'], t['y']))
-            t['y'] -= 1.5 if t.get('font_type') == 'small' else 2
+            
+            draw_x = t['x'] - txt_surf.get_width() // 2
+            
+            self.screen.blit(shadow, (draw_x + 1, t['y'] + 1))
+            self.screen.blit(shadow, (draw_x - 1, t['y'] - 1))
+            self.screen.blit(txt_surf, (draw_x, t['y']))
+            
+            t['y'] -= 1.5 if t.get('font_type') in ['small', 'tiny'] else 2
             t['timer'] -= 1
             if t['timer'] <= 0: self.floating_texts.remove(t)
 
@@ -825,23 +837,25 @@ class PygameApp:
         overlay.fill((0, 0, 0, 200))
         self.screen.blit(overlay, (0, 0))
         
-        box = pygame.Rect(200, 150, 400, 300)
-        pygame.draw.rect(self.screen, SLATE_900, box, border_radius=16)
-        pygame.draw.rect(self.screen, AMBER_400, box, 3, border_radius=16)
+        box = pygame.Rect(200, 150, 400, 260)
+        s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
+        pygame.draw.rect(s, (15, 23, 42, 180), s.get_rect(), border_radius=12)
+        pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1, border_radius=12)
+        self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.font.render("MERCHANT'S SHOP", True, AMBER_500), (220, 170))
-        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (220, 220))
+        self.screen.blit(self.name_font.render("MERCHANT'S SHOP", True, AMBER_500), (220, 170))
+        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (220, 210))
         
         potions_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'potion'])
         scrolls_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'scroll'])
         
-        self.screen.blit(self.name_font.render("[1] Health Potion (50G)", True, EMERALD_400), (220, 280))
-        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, SLATE_400), (240, 310))
+        self.screen.blit(self.btn_font.render("[1] Health Potion (50G)", True, EMERALD_400), (220, 260))
+        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, SLATE_400), (240, 285))
         
-        self.screen.blit(self.name_font.render("[2] Hint Scroll (50G)", True, CYAN_400), (220, 360))
-        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, SLATE_400), (240, 390))
+        self.screen.blit(self.btn_font.render("[2] Hint Scroll (50G)", True, CYAN_400), (220, 320))
+        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, SLATE_400), (240, 345))
         
-        self.screen.blit(self.small_font.render("Press SPACE or ESC to leave", True, GRAY), (220, 430))
+        self.screen.blit(self.small_font.render("Press SPACE or ESC to leave", True, GRAY), (220, 380))
 
     def draw_upgrade(self):
         self.draw_overworld()
@@ -849,18 +863,20 @@ class PygameApp:
         overlay.fill((0, 0, 0, 200))
         self.screen.blit(overlay, (0, 0))
         
-        box = pygame.Rect(150, 150, 500, 300)
-        pygame.draw.rect(self.screen, SLATE_900, box, border_radius=16)
-        pygame.draw.rect(self.screen, CYAN_400, box, 3, border_radius=16)
+        box = pygame.Rect(150, 150, 500, 260)
+        s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
+        pygame.draw.rect(s, (15, 23, 42, 180), s.get_rect(), border_radius=12)
+        pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1, border_radius=12)
+        self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.font.render("STATUE DESTROYED!", True, AMBER_500), (170, 170))
-        self.screen.blit(self.small_font.render("The gods grant you a blessing. Choose your upgrade:", True, WHITE), (170, 220))
+        self.screen.blit(self.name_font.render("STATUE DESTROYED!", True, AMBER_500), (170, 170))
+        self.screen.blit(self.small_font.render("The gods grant you a blessing. Choose your upgrade:", True, WHITE), (170, 210))
         
-        self.screen.blit(self.name_font.render("[1] Power of Ares (ATK +5)", True, RED_500), (170, 280))
-        self.screen.blit(self.small_font.render(f"Current ATK: {self.base_atk}", True, SLATE_400), (190, 310))
+        self.screen.blit(self.btn_font.render("[1] Power of Ares (ATK +5)", True, RED_500), (170, 260))
+        self.screen.blit(self.small_font.render(f"Current ATK: {self.base_atk}", True, SLATE_400), (190, 285))
         
-        self.screen.blit(self.name_font.render("[2] Vitality of Demeter (MAX HP +20 & Full Heal)", True, EMERALD_400), (170, 360))
-        self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, SLATE_400), (190, 390))
+        self.screen.blit(self.btn_font.render("[2] Vitality of Demeter (MAX HP +20 & Full Heal)", True, EMERALD_400), (170, 320))
+        self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, SLATE_400), (190, 345))
 
     def draw_modern_hp_bar(self, surface, x, y, curr, max_hp, fill, name):
         panel_w = 300
@@ -915,12 +931,21 @@ class PygameApp:
             battle_surf.blit(combo_txt, (460, 295))
         
         for t in self.floating_texts[:]:
-            f = self.small_font if t.get('font_type') == 'small' else self.combo_font
+            if t.get('font_type') == 'tiny': f = self.tiny_font
+            elif t.get('font_type') == 'small': f = self.small_font
+            else: f = self.combo_font
+            
             txt_str = str(t['text'])
+            txt_surf = f.render(txt_str, True, t['color'])
             shadow = f.render(txt_str, True, BLACK)
-            battle_surf.blit(shadow, (t['x'] + 1, t['y'] + 1))
-            battle_surf.blit(f.render(txt_str, True, t['color']), (t['x'], t['y']))
-            t['y'] -= 1.5 if t.get('font_type') == 'small' else 2
+            
+            draw_x = t['x'] - txt_surf.get_width() // 2
+            
+            battle_surf.blit(shadow, (draw_x + 1, t['y'] + 1))
+            battle_surf.blit(shadow, (draw_x - 1, t['y'] - 1))
+            battle_surf.blit(txt_surf, (draw_x, t['y']))
+            
+            t['y'] -= 1.5 if t.get('font_type') in ['small', 'tiny'] else 2
             t['timer'] -= 1
             if t['timer'] <= 0: self.floating_texts.remove(t)
             
