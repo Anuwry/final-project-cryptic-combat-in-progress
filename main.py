@@ -92,7 +92,25 @@ class PygameApp:
         self.realm_y = 0
         self.current_level = 1
         
-        self.game_map = GameMap(self.realm_x, self.realm_y)
+        self.generated_boss_levels = set()
+        maps_dir = os.path.join(BASE_DIR, "data/maps")
+        if os.path.exists(maps_dir):
+            for f in os.listdir(maps_dir):
+                if f.endswith('.json') and f.startswith('realm_'):
+                    try:
+                        with open(os.path.join(maps_dir, f), 'r') as mf:
+                            mdata = json.load(mf)
+                            for obj in mdata.get('objects', []):
+                                if obj.get('type') == 'statue' and obj.get('data', {}).get('tier') == 'Boss':
+                                    parts = f.replace('realm_', '').replace('.json', '').split('_')
+                                    rx, ry = int(parts[0]), int(parts[1])
+                                    lvl = abs(rx) + abs(ry) + 1
+                                    self.generated_boss_levels.add(lvl)
+                                    break
+                    except:
+                        pass
+        
+        self.game_map = GameMap(self.realm_x, self.realm_y, False)
         self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
         self.total_statues = len(self.game_map.get_statues())
         
@@ -216,11 +234,23 @@ class PygameApp:
 
     def change_realm(self, target_x, target_y, exit_side):
         self.game_map.save_map()
+        
+        target_level = abs(target_x) + abs(target_y) + 1
+        is_boss_tier = (target_level > 1 and target_level % 5 == 0)
+        target_file = os.path.join(BASE_DIR, f"data/maps/realm_{target_x}_{target_y}.json")
+        
+        force_normal = False
+        if not os.path.exists(target_file) and is_boss_tier:
+            if target_level in self.generated_boss_levels:
+                force_normal = True
+            else:
+                self.generated_boss_levels.add(target_level)
+                
         self.realm_x = target_x
         self.realm_y = target_y
-        self.current_level = abs(self.realm_x) + abs(self.realm_y) + 1
+        self.current_level = target_level
+        self.game_map = GameMap(self.realm_x, self.realm_y, force_normal)
         
-        self.game_map = GameMap(self.realm_x, self.realm_y)
         self.total_statues = len(self.game_map.get_statues())
         self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
         
@@ -271,9 +301,15 @@ class PygameApp:
             
         self.enemy = Enemy(name=name, max_hp=max_hp, attack_power=atk)
         
-        enemy_layers = [random.choice(self.enemy_bases), random.choice(self.options['pants']), random.choice(self.options['armor'][1:]),
-                        random.choice(self.options['hair']), random.choice(self.options['hat']), random.choice(self.options['shield']),
-                        random.choice(self.options['weapon'][1:])]
+        enemy_layers = [
+            random.choice(self.options['base']), 
+            random.choice(self.options['pants']), 
+            random.choice(self.options['armor'][1:]),
+            random.choice(self.options['hair']), 
+            random.choice(self.options['hat']), 
+            random.choice(self.options['shield']),
+            random.choice(self.options['weapon'][1:])
+        ]
         self.enemy_battle_img = self.sprite_sheet.get_equipped_image_by_grid(enemy_layers, 10)
         self.target_word = self.dictionary.generate_random_word()
         self.battle_float_timer, self.crit_timer, self.floating_texts = 0, 0, []
@@ -354,6 +390,15 @@ class PygameApp:
                         self.dragged_item = self.inventory[slot_idx]
                         self.dragged_from_idx = slot_idx
                         self.inventory[slot_idx] = None
+                    elif self.showing_dialogue:
+                        mx, my = event.pos
+                        dialogue_rect = pygame.Rect(100, self.screen_height - 150, 600, 120)
+                        if dialogue_rect.collidepoint(mx, my):
+                            self.showing_dialogue = False
+                            if self.current_npc and self.current_npc.data.get('name') == 'Merchant':
+                                self.state = STATE_SHOP
+                            self.current_npc = None
+
                 elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                     if self.dragged_item:
                         slot_idx = self.get_hovered_slot(event.pos)
@@ -365,6 +410,30 @@ class PygameApp:
                             self.inventory[self.dragged_from_idx] = self.dragged_item
                         self.dragged_item = None
                         self.dragged_from_idx = -1
+
+            elif self.state == STATE_SHOP:
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    if hasattr(self, 'shop_potion_rect') and self.shop_potion_rect.collidepoint(mx, my):
+                        if self.gold >= 50 and self.add_item('potion', 'Health Potion', 'Heals 50 HP', 1):
+                            self.gold -= 50
+                    elif hasattr(self, 'shop_scroll_rect') and self.shop_scroll_rect.collidepoint(mx, my):
+                        if self.gold >= 50 and self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 1):
+                            self.gold -= 50
+                    elif hasattr(self, 'shop_exit_rect') and self.shop_exit_rect.collidepoint(mx, my):
+                        self.state = STATE_OVERWORLD
+
+            elif self.state == STATE_UPGRADE:
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    if hasattr(self, 'upg_ares_rect') and self.upg_ares_rect.collidepoint(mx, my):
+                        self.base_atk += 5
+                        self.player.base_attack = self.base_atk
+                        self.state = STATE_OVERWORLD
+                    elif hasattr(self, 'upg_demeter_rect') and self.upg_demeter_rect.collidepoint(mx, my):
+                        self.player_max_hp += 20
+                        self.player.hp = self.player_max_hp
+                        self.state = STATE_OVERWORLD
             
             if self.state == STATE_SELECTION:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -381,30 +450,35 @@ class PygameApp:
                             
             elif self.state == STATE_OVERWORLD:
                 if event.type == pygame.KEYDOWN:
-                    if self.showing_dialogue and event.key in (pygame.K_SPACE, pygame.K_RETURN):
-                        self.showing_dialogue = False
-                        if self.current_npc and self.current_npc.data.get('name') == 'Merchant':
-                            self.state = STATE_SHOP
-                        self.current_npc = None
-                    elif event.key in (pygame.K_SPACE, pygame.K_RETURN):
-                        player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
-                        nearby_statue = self.game_map.get_nearby_statue(player_rect)
-                        if nearby_statue:
-                            self.current_statue = nearby_statue
-                            self.state = STATE_BATTLE
-                            self.randomize_enemy()
-                            self.gm.start_word_timer()
-                    elif event.key == pygame.K_f:
-                        player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
-                        nearby_npc = self.game_map.get_nearby_npc(player_rect)
-                        if nearby_npc:
-                            self.showing_dialogue = True
-                            self.current_npc = nearby_npc
-                            self.dialogue_timer = 180  
-                    elif event.key == pygame.K_e:
-                        self.show_inventory = not self.show_inventory
-                    elif pygame.K_1 <= event.key <= pygame.K_5:
-                        self.use_item(event.key - pygame.K_1)
+                    if self.showing_dialogue:
+                        if event.key in (pygame.K_SPACE, pygame.K_RETURN):
+                            self.showing_dialogue = False
+                            if self.current_npc and self.current_npc.data.get('name') == 'Merchant':
+                                self.state = STATE_SHOP
+                            self.current_npc = None
+                        elif event.key == pygame.K_ESCAPE:
+                            self.showing_dialogue = False
+                            self.current_npc = None
+                    else:
+                        if event.key in (pygame.K_SPACE, pygame.K_RETURN):
+                            player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
+                            nearby_statue = self.game_map.get_nearby_statue(player_rect)
+                            if nearby_statue:
+                                self.current_statue = nearby_statue
+                                self.state = STATE_BATTLE
+                                self.randomize_enemy()
+                                self.gm.start_word_timer()
+                        elif event.key == pygame.K_f:
+                            player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
+                            nearby_npc = self.game_map.get_nearby_npc(player_rect)
+                            if nearby_npc:
+                                self.showing_dialogue = True
+                                self.current_npc = nearby_npc
+                                self.dialogue_timer = 180  
+                        elif event.key == pygame.K_e:
+                            self.show_inventory = not self.show_inventory
+                        elif pygame.K_1 <= event.key <= pygame.K_5:
+                            self.use_item(event.key - pygame.K_1)
                             
             elif self.state == STATE_SHOP:
                 if event.type == pygame.KEYDOWN:
@@ -657,19 +731,18 @@ class PygameApp:
             target_ry -= 1; will_change = True; exit_side = 'top'
 
         if will_change:
-            self.change_realm(target_rx, target_ry, exit_side)
-            return
+            target_file = os.path.join(BASE_DIR, f"data/maps/realm_{target_rx}_{target_ry}.json")
+            if os.path.exists(target_file):
+                self.change_realm(target_rx, target_ry, exit_side)
+                return
+            else:
+                self.map_player_pos[0] = old_x
+                self.map_player_pos[1] = old_y
         
         self.game_map.update_camera(self.map_player_pos[0] + 32, self.map_player_pos[1] + 32, 
                                     self.screen_width, self.screen_height)
         
         self.move_timer_overworld = self.move_timer_overworld + 0.2 if self.is_moving else 0
-        
-        if self.showing_dialogue:
-            self.dialogue_timer -= 1
-            if self.dialogue_timer <= 0:
-                self.showing_dialogue = False
-                self.current_npc = None
 
     def draw_inventory_ui(self, surface):
         slot_size = 40
@@ -732,59 +805,46 @@ class PygameApp:
         
         player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
         nearby_statue = self.game_map.get_nearby_statue(player_rect)
+        
         if nearby_statue:
-            prompt_box = pygame.Surface((250, 40))
-            prompt_box.fill(BLACK)
-            prompt_box.set_alpha(180)
-            self.screen.blit(prompt_box, (player_screen_x - 90, player_screen_y - 50))
-            self.screen.blit(self.small_font.render("Press SPACE to Battle", True, WHITE), 
-                           (player_screen_x - 80, player_screen_y - 40))
+            prompt_box = pygame.Surface((220, 36), pygame.SRCALPHA)
+            pygame.draw.rect(prompt_box, (15, 23, 42, 180), prompt_box.get_rect(), border_radius=8)
+            pygame.draw.rect(prompt_box, (123, 165, 172, 100), prompt_box.get_rect(), 1, border_radius=8)
+            self.screen.blit(prompt_box, (player_screen_x - 70, player_screen_y - 45))
+            self.screen.blit(self.small_font.render("Press SPACE to Battle", True, WHITE), (player_screen_x - 55, player_screen_y - 37))
         
         nearby_npc = self.game_map.get_nearby_npc(player_rect)
         if nearby_npc and not self.showing_dialogue:
-            prompt_box = pygame.Surface((200, 40))
-            prompt_box.fill(BLACK)
-            prompt_box.set_alpha(180)
-            self.screen.blit(prompt_box, (player_screen_x - 70, player_screen_y - 50))
-            self.screen.blit(self.small_font.render("Press F to Talk", True, CYAN_400),  
-                           (player_screen_x - 60, player_screen_y - 40))
+            prompt_box = pygame.Surface((180, 36), pygame.SRCALPHA)
+            pygame.draw.rect(prompt_box, (15, 23, 42, 180), prompt_box.get_rect(), border_radius=8)
+            pygame.draw.rect(prompt_box, (123, 165, 172, 100), prompt_box.get_rect(), 1, border_radius=8)
+            self.screen.blit(prompt_box, (player_screen_x - 50, player_screen_y - 45))
+            self.screen.blit(self.small_font.render("Press F to Talk", True, CYAN_400), (player_screen_x - 30, player_screen_y - 37))
         
         if self.showing_dialogue and self.current_npc:
-            dialogue_box = pygame.Surface((600, 120))
-            dialogue_box.fill(SLATE_900)
-            dialogue_box.set_alpha(230)
+            dialogue_box = pygame.Rect(100, self.screen_height - 150, 600, 120)
+            mx, my = pygame.mouse.get_pos()
+            hovering_dialogue = dialogue_box.collidepoint(mx, my)
             
-            box_x = (self.screen_width - 600) // 2
-            box_y = self.screen_height - 280 
-            
-            self.screen.blit(dialogue_box, (box_x, box_y))
-            pygame.draw.rect(self.screen, CYAN_400, (box_x, box_y, 600, 120), 3, border_radius=8)
+            s = pygame.Surface((dialogue_box.width, dialogue_box.height), pygame.SRCALPHA)
+            pygame.draw.rect(s, (15, 23, 42, 180), s.get_rect(), border_radius=12)
+            pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1, border_radius=12)
+            self.screen.blit(s, dialogue_box.topleft)
             
             npc_name = self.current_npc.data.get('name', 'Stranger')
             npc_text = self.current_npc.data.get('dialogue', 'Hello there!')
             
-            name_surf = self.name_font.render(npc_name, True, AMBER_400)
-            self.screen.blit(name_surf, (box_x + 20, box_y + 15))
+            self.screen.blit(self.btn_font.render(npc_name, True, AMBER_400), (dialogue_box.x + 20, dialogue_box.y + 15))
+            self.screen.blit(self.small_font.render(npc_text, True, WHITE), (dialogue_box.x + 20, dialogue_box.y + 50))
             
-            words = npc_text.split()
-            lines = []
-            current_line = []
-            for word in words:
-                test_line = ' '.join(current_line + [word])
-                if self.small_font.size(test_line)[0] < 550:
-                    current_line.append(word)
-                else:
-                    lines.append(' '.join(current_line))
-                    current_line = [word]
-            if current_line:
-                lines.append(' '.join(current_line))
+            if npc_name == 'Merchant': action_txt = "[ENTER] / Click to Shop   |   [ESC] Leave"
+            else: action_txt = "[ENTER] / Click to Continue   |   [ESC] Leave"
             
-            for i, line in enumerate(lines[:2]):
-                text_surf = self.small_font.render(line, True, WHITE)
-                self.screen.blit(text_surf, (box_x + 20, box_y + 50 + i * 25))
+            txt_color = CYAN_400 if hovering_dialogue else SLATE_400
+            action_surf = self.tiny_font.render(action_txt, True, txt_color)
+            self.screen.blit(action_surf, (dialogue_box.right - action_surf.get_width() - 20, dialogue_box.bottom - 25))
         
         custom_cyan = (123, 165, 172)
-        
         if self.total_statues > 0:
             statue_text = self.name_font.render(f"{self.statues_collected} / {self.total_statues}", True, WHITE)
             box_width = statue_text.get_width() + 60
@@ -813,16 +873,12 @@ class PygameApp:
         self.draw_inventory_ui(self.screen)
         
         for t in self.floating_texts[:]:
-            if t.get('font_type') == 'tiny': f = self.tiny_font
-            elif t.get('font_type') == 'small': f = self.small_font
-            else: f = self.combo_font
-            
+            f = self.tiny_font if t.get('font_type') == 'tiny' else (self.small_font if t.get('font_type') == 'small' else self.combo_font)
             txt_str = str(t['text'])
             txt_surf = f.render(txt_str, True, t['color'])
             shadow = f.render(txt_str, True, BLACK)
             
             draw_x = t['x'] - txt_surf.get_width() // 2
-            
             self.screen.blit(shadow, (draw_x + 1, t['y'] + 1))
             self.screen.blit(shadow, (draw_x - 1, t['y'] - 1))
             self.screen.blit(txt_surf, (draw_x, t['y']))
@@ -834,49 +890,67 @@ class PygameApp:
     def draw_shop(self):
         self.draw_overworld()
         overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 200))
+        overlay.fill((0, 0, 0, 150))
         self.screen.blit(overlay, (0, 0))
         
-        box = pygame.Rect(200, 150, 400, 260)
+        box = pygame.Rect(180, 150, 440, 260)
         s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
-        pygame.draw.rect(s, (15, 23, 42, 180), s.get_rect(), border_radius=12)
+        pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect(), border_radius=12)
         pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1, border_radius=12)
         self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.name_font.render("MERCHANT'S SHOP", True, AMBER_500), (220, 170))
-        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (220, 210))
+        self.screen.blit(self.font.render("MERCHANT'S SHOP", True, AMBER_500), (210, 170))
+        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (210, 210))
         
         potions_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'potion'])
         scrolls_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'scroll'])
         
-        self.screen.blit(self.btn_font.render("[1] Health Potion (50G)", True, EMERALD_400), (220, 260))
-        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, SLATE_400), (240, 285))
+        mx, my = pygame.mouse.get_pos()
         
-        self.screen.blit(self.btn_font.render("[2] Hint Scroll (50G)", True, CYAN_400), (220, 320))
-        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, SLATE_400), (240, 345))
+        self.shop_potion_rect = pygame.Rect(200, 240, 400, 50)
+        p_hover = self.shop_potion_rect.collidepoint(mx, my)
+        pygame.draw.rect(self.screen, (255,255,255, 20) if p_hover else (0,0,0,0), self.shop_potion_rect, border_radius=8)
+        self.screen.blit(self.btn_font.render("[1] Health Potion (50G)", True, EMERALD_500 if p_hover else EMERALD_400), (210, 245))
+        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, WHITE if p_hover else SLATE_400), (210, 270))
         
-        self.screen.blit(self.small_font.render("Press SPACE or ESC to leave", True, GRAY), (220, 380))
+        self.shop_scroll_rect = pygame.Rect(200, 300, 400, 50)
+        s_hover = self.shop_scroll_rect.collidepoint(mx, my)
+        pygame.draw.rect(self.screen, (255,255,255, 20) if s_hover else (0,0,0,0), self.shop_scroll_rect, border_radius=8)
+        self.screen.blit(self.btn_font.render("[2] Hint Scroll (50G)", True, CYAN_500 if s_hover else CYAN_400), (210, 305))
+        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, WHITE if s_hover else SLATE_400), (210, 330))
+        
+        self.shop_exit_rect = pygame.Rect(200, 365, 400, 30)
+        e_hover = self.shop_exit_rect.collidepoint(mx, my)
+        self.screen.blit(self.small_font.render("[ESC] / Click here to leave", True, RED_500 if e_hover else GRAY), (210, 370))
 
     def draw_upgrade(self):
         self.draw_overworld()
         overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 200))
+        overlay.fill((0, 0, 0, 150))
         self.screen.blit(overlay, (0, 0))
         
         box = pygame.Rect(150, 150, 500, 260)
         s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
-        pygame.draw.rect(s, (15, 23, 42, 180), s.get_rect(), border_radius=12)
+        pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect(), border_radius=12)
         pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1, border_radius=12)
         self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.name_font.render("STATUE DESTROYED!", True, AMBER_500), (170, 170))
-        self.screen.blit(self.small_font.render("The gods grant you a blessing. Choose your upgrade:", True, WHITE), (170, 210))
+        self.screen.blit(self.font.render("STATUE DESTROYED!", True, AMBER_500), (180, 170))
+        self.screen.blit(self.small_font.render("The gods grant you a blessing. Choose your upgrade:", True, WHITE), (180, 210))
         
-        self.screen.blit(self.btn_font.render("[1] Power of Ares (ATK +5)", True, RED_500), (170, 260))
-        self.screen.blit(self.small_font.render(f"Current ATK: {self.base_atk}", True, SLATE_400), (190, 285))
+        mx, my = pygame.mouse.get_pos()
         
-        self.screen.blit(self.btn_font.render("[2] Vitality of Demeter (MAX HP +20 & Full Heal)", True, EMERALD_400), (170, 320))
-        self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, SLATE_400), (190, 345))
+        self.upg_ares_rect = pygame.Rect(170, 240, 460, 50)
+        a_hover = self.upg_ares_rect.collidepoint(mx, my)
+        pygame.draw.rect(self.screen, (255,255,255, 20) if a_hover else (0,0,0,0), self.upg_ares_rect, border_radius=8)
+        self.screen.blit(self.btn_font.render("[1] Power of Ares (ATK +5)", True, RED_500), (180, 245))
+        self.screen.blit(self.small_font.render(f"Current ATK: {self.base_atk}", True, WHITE if a_hover else SLATE_400), (180, 270))
+        
+        self.upg_demeter_rect = pygame.Rect(170, 300, 460, 50)
+        d_hover = self.upg_demeter_rect.collidepoint(mx, my)
+        pygame.draw.rect(self.screen, (255,255,255, 20) if d_hover else (0,0,0,0), self.upg_demeter_rect, border_radius=8)
+        self.screen.blit(self.btn_font.render("[2] Vitality of Demeter (MAX HP +20 & Full Heal)", True, EMERALD_400), (180, 305))
+        self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, WHITE if d_hover else SLATE_400), (180, 330))
 
     def draw_modern_hp_bar(self, surface, x, y, curr, max_hp, fill, name):
         panel_w = 300
@@ -931,10 +1005,7 @@ class PygameApp:
             battle_surf.blit(combo_txt, (460, 295))
         
         for t in self.floating_texts[:]:
-            if t.get('font_type') == 'tiny': f = self.tiny_font
-            elif t.get('font_type') == 'small': f = self.small_font
-            else: f = self.combo_font
-            
+            f = self.tiny_font if t.get('font_type') == 'tiny' else (self.small_font if t.get('font_type') == 'small' else self.combo_font)
             txt_str = str(t['text'])
             txt_surf = f.render(txt_str, True, t['color'])
             shadow = f.render(txt_str, True, BLACK)
