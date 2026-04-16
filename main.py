@@ -77,8 +77,12 @@ class PygameApp:
         self.player_max_hp = 100
         self.player = Player(hp=self.player_max_hp, base_attack=15)
         
-        self.game_map = GameMap("data/maps/overworld.json")
-        self.statues_collected = 0
+        self.realm_x = 0
+        self.realm_y = 0
+        self.current_level = 1
+        
+        self.game_map = GameMap(self.realm_x, self.realm_y)
+        self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
         self.total_statues = len(self.game_map.get_statues())
         
         self.floating_texts = []
@@ -105,11 +109,8 @@ class PygameApp:
         self.setup_overworld()
 
     def load_image_safely(self, path, size, fallback_color):
-        if os.path.exists(path):
-            return pygame.transform.scale(pygame.image.load(path).convert_alpha(), size)
-        surf = pygame.Surface(size)
-        surf.fill(fallback_color)
-        return surf
+        if os.path.exists(path): return pygame.transform.scale(pygame.image.load(path).convert_alpha(), size)
+        surf = pygame.Surface(size); surf.fill(fallback_color); return surf
 
     def setup_assets(self):
         map_bg_path = os.path.join(BASE_DIR, "assets", "images", "map_bg.png")
@@ -122,15 +123,13 @@ class PygameApp:
         self.statue_img = self.load_image_safely(statue_path, (60, 80), (100, 100, 100))
         self.sprite_sheet = SpriteSheet(sprite_path)
 
-    def generate_box(self, c1, r1, c2, r2):
-        return [(c, r) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)]
+    def generate_box(self, c1, r1, c2, r2): return [(c, r) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)]
 
     def filter_empty(self, coords_list):
         valid = []
         for c, r in coords_list:
             img = self.sprite_sheet.get_image_by_grid(c, r, 1)
-            rect = img.get_bounding_rect()
-            if rect.width > 0: valid.append((c, r))
+            if img.get_bounding_rect().width > 0: valid.append((c, r))
         return valid
 
     def setup_selection(self):
@@ -139,35 +138,24 @@ class PygameApp:
         self.enemy_bases = [b for b in npc_bases if b not in player_bases]
         
         self.options = {
-            'base': player_bases,
-            'pants': [None] + self.filter_empty(self.generate_box(2, 0, 4, 9)),
+            'base': player_bases, 'pants': [None] + self.filter_empty(self.generate_box(2, 0, 4, 9)),
             'armor': [None] + self.filter_empty(self.generate_box(5, 0, 17, 9)),
             'hair': [None] + self.filter_empty(self.generate_box(18, 0, 25, 7) + self.generate_box(18, 8, 20, 11)),
             'hat': [None] + self.filter_empty(self.generate_box(29, 0, 31, 8)),
             'shield': [None] + self.filter_empty(self.generate_box(36, 0, 39, 8)),
             'weapon': [None] + self.filter_empty(self.generate_box(41, 0, 55, 4) + self.generate_box(41, 5, 54, 9))
         }
-        
         self.tabs = ['base', 'hair', 'hat', 'armor', 'pants', 'weapon', 'shield']
         self.tab_names = ['BODY', 'HAIR', 'HAT', 'ARMOR', 'PANTS', 'WEAPON', 'SHIELD']
         self.current_tab = 'base'
-        self.selections = {k: 0 for k in self.tabs}
-        self.pages = {k: 0 for k in self.tabs}
+        self.selections, self.pages = {k: 0 for k in self.tabs}, {k: 0 for k in self.tabs}
         self.items_per_page = 30 
         self.start_btn_rect = pygame.Rect(495, 495, 260, 50)
         self.active_buttons = []
         self.update_player_visuals()
 
     def update_player_visuals(self):
-        layers = [
-            self.options['base'][self.selections['base']],
-            self.options['pants'][self.selections['pants']],
-            self.options['armor'][self.selections['armor']],
-            self.options['hair'][self.selections['hair']],
-            self.options['hat'][self.selections['hat']],
-            self.options['shield'][self.selections['shield']],
-            self.options['weapon'][self.selections['weapon']]
-        ]
+        layers = [self.options[k][self.selections[k]] for k in ['base', 'pants', 'armor', 'hair', 'hat', 'shield', 'weapon']]
         self.player_preview_img = self.sprite_sheet.get_equipped_image_by_grid(layers, 14)
         self.player_overworld_equipped_img = self.sprite_sheet.get_equipped_image_by_grid(layers, 4)
         self.player_battle_img = self.sprite_sheet.get_equipped_image_by_grid(layers, 10)
@@ -178,16 +166,48 @@ class PygameApp:
         self.facing_left_overworld = False
         self.is_moving = False
         self.move_timer_overworld = 0
-        
         self.enemy_battle_pos = (550, 100)
         self.player_battle_pos = (80, 230)
+
+    def change_realm(self, dx, dy, exit_side):
+        self.game_map.save_map()
+        self.realm_x += dx
+        self.realm_y += dy
+        self.current_level = abs(self.realm_x) + abs(self.realm_y) + 1
+        
+        self.game_map = GameMap(self.realm_x, self.realm_y)
+        self.total_statues = len(self.game_map.get_statues())
+        self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
+        
+        map_pixel_width = self.game_map.width * 64
+        map_pixel_height = self.game_map.height * 64
+        
+        if exit_side == 'right': 
+            path_y = self.game_map.find_path_y()
+            self.map_player_pos = [32, path_y * 64]
+        elif exit_side == 'left': 
+            path_y = self.game_map.find_path_y()
+            self.map_player_pos = [map_pixel_width - 96, path_y * 64]
+        elif exit_side == 'bottom': 
+            path_x = self.game_map.find_path_x()
+            self.map_player_pos = [path_x * 64, 32]
+        elif exit_side == 'top': 
+            path_x = self.game_map.find_path_x()
+            self.map_player_pos = [path_x * 64, map_pixel_height - 96]
+            
+        self.facing_left_overworld = False
+        self.game_map.camera_offset = [0, 0]
+        self.game_map.target_camera_offset = [0, 0]
 
     def spawn_floating_text(self, text, x, y, color):
         self.floating_texts.append({'text': text, 'x': x, 'y': y, 'timer': 45, 'color': color})
 
     def randomize_enemy(self):
-        boss_names = ["Corrupted Knight", "Void Fiend", "Cursed Rogue", "Mad Jester", "Shadow Golem", "Dark Mage", "Swamp Terror"]
-        self.enemy = Enemy(name=random.choice(boss_names), max_hp=100, attack_power=10)
+        boss_names = ["Corrupted Knight", "Void Fiend", "Cursed Rogue", "Mad Jester", "Shadow Golem", "Dark Mage"]
+        scaled_hp = 100 + ((self.current_level - 1) * 20)
+        scaled_atk = 10 + ((self.current_level - 1) * 2)
+        
+        self.enemy = Enemy(name=random.choice(boss_names), max_hp=scaled_hp, attack_power=scaled_atk)
         enemy_layers = [random.choice(self.enemy_bases), random.choice(self.options['pants']), random.choice(self.options['armor'][1:]),
                         random.choice(self.options['hair']), random.choice(self.options['hat']), random.choice(self.options['shield']),
                         random.choice(self.options['weapon'][1:])]
@@ -200,13 +220,15 @@ class PygameApp:
 
     def handle_events(self):
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.gm.export_data_to_csv(); pygame.quit(); sys.exit()
+            if event.type == pygame.QUIT: 
+                if hasattr(self, 'game_map'): self.game_map.save_map()
+                self.gm.export_data_to_csv()
+                pygame.quit()
+                sys.exit()
+            
             if self.state == STATE_SELECTION:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if self.start_btn_rect.collidepoint(event.pos): 
-                        self.state = STATE_OVERWORLD
-                        return
+                    if self.start_btn_rect.collidepoint(event.pos): self.state = STATE_OVERWORLD; return
                     for btn in self.active_buttons:
                         if btn['rect'].collidepoint(event.pos):
                             if btn['type'] == 'tab': self.current_tab = btn['tab']
@@ -216,6 +238,7 @@ class PygameApp:
                                 max_p = math.ceil(len(self.options[self.current_tab]) / self.items_per_page) - 1
                                 self.pages[self.current_tab] = min(max_p, self.pages[self.current_tab] + 1)
                             break 
+                            
             elif self.state == STATE_OVERWORLD:
                 if event.type == pygame.KEYDOWN:
                     if self.showing_dialogue and event.key in (pygame.K_SPACE, pygame.K_RETURN):
@@ -247,6 +270,7 @@ class PygameApp:
                             if hasattr(self, 'current_statue') and self.enemy.current_hp <= 0:
                                 self.current_statue.collected = True
                                 self.statues_collected += 1
+                                self.game_map.save_map()
                                 
                             self.player.hp = self.player_max_hp
                     else:
@@ -278,7 +302,6 @@ class PygameApp:
             
             self.p_anim_timer = 20
             self.spawn_floating_text(f"-{damage}", self.enemy_battle_pos[0] + 60, self.enemy_battle_pos[1] + 30, RED_500)
-            
             if self.player.combo_count > 1: self.crit_timer = 60
             
             if self.gm.check_win_condition(self.enemy): self.gm.game_over = True
@@ -289,7 +312,6 @@ class PygameApp:
                 self.enemy.attack_player(self.player)
                 self.e_anim_timer = 20
                 self.spawn_floating_text(f"-{self.enemy.attack_power}", self.player_battle_pos[0] + 60, self.player_battle_pos[1] + 30, RED_500)
-                
                 if self.player.hp <= 0: self.gm.game_over = True
                 else: self.reset_for_next_word()
 
@@ -403,6 +425,23 @@ class PygameApp:
         if self.game_map.check_collision_at(self.map_player_pos[0], self.map_player_pos[1], 64, 64):
             self.map_player_pos[0] = old_x
             self.map_player_pos[1] = old_y
+            
+        map_pixel_width = self.game_map.width * 64
+        map_pixel_height = self.game_map.height * 64
+        
+        edge_threshold = 10
+        if self.map_player_pos[0] > map_pixel_width - 64 - edge_threshold:
+            self.change_realm(1, 0, 'right')
+            return
+        elif self.map_player_pos[0] < edge_threshold:
+            self.change_realm(-1, 0, 'left')
+            return
+        elif self.map_player_pos[1] > map_pixel_height - 64 - edge_threshold:
+            self.change_realm(0, 1, 'bottom')
+            return
+        elif self.map_player_pos[1] < edge_threshold:
+            self.change_realm(0, -1, 'top')
+            return
         
         self.game_map.update_camera(self.map_player_pos[0] + 32, self.map_player_pos[1] + 32, 
                                     self.screen_width, self.screen_height)
@@ -480,24 +519,20 @@ class PygameApp:
                 text_surf = self.small_font.render(line, True, WHITE)
                 self.screen.blit(text_surf, (box_x + 20, box_y + 50 + i * 25))
         
-        statue_text = self.font.render(f"Statues: {self.statues_collected}/{self.total_statues}", True, AMBER_400)
+        if self.realm_x == 0 and self.realm_y == 0:
+            realm_str = "Sanctuary Hub"
+        else:
+            realm_str = f"Realm ({self.realm_x}, {self.realm_y}) - Lv. {self.current_level}"
+            
+        if self.total_statues > 0:
+            statue_text_str = f"{realm_str} | Statues: {self.statues_collected}/{self.total_statues}"
+        else:
+            statue_text_str = f"{realm_str} | No statues here. Keep exploring!"
+            
+        statue_text = self.font.render(statue_text_str, True, AMBER_400)
         pygame.draw.rect(self.screen, SLATE_900, (10, 10, statue_text.get_width() + 20, 50), border_radius=8)
         pygame.draw.rect(self.screen, AMBER_500, (10, 10, statue_text.get_width() + 20, 50), 2, border_radius=8)
         self.screen.blit(statue_text, (20, 20))
-        
-        if self.statues_collected >= self.total_statues and self.total_statues > 0:
-            win_overlay = pygame.Surface((self.screen_width, self.screen_height))
-            win_overlay.fill(BLACK)
-            win_overlay.set_alpha(180)
-            self.screen.blit(win_overlay, (0, 0))
-            
-            win_text = self.large_font.render("ALL STATUES COLLECTED!", True, AMBER_400)
-            win_rect = win_text.get_rect(center=(self.screen_width // 2, self.screen_height // 2 - 50))
-            self.screen.blit(win_text, win_rect)
-            
-            sub_text = self.font.render("You are the ultimate word warrior!", True, EMERALD_400)
-            sub_rect = sub_text.get_rect(center=(self.screen_width // 2, self.screen_height // 2 + 20))
-            self.screen.blit(sub_text, sub_rect)
 
     def draw_modern_hp_bar(self, surface, x, y, curr, max_hp, fill, name):
         panel_w = 300
