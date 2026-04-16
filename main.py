@@ -161,16 +161,16 @@ class PygameApp:
         self.item_icons['compass'] = compass_img
         
         potion_img = pygame.Surface((32, 32), pygame.SRCALPHA)
-        pygame.draw.rect(potion_img, RED_500, (10, 14, 12, 14), border_radius=4)
+        pygame.draw.rect(potion_img, RED_500, (10, 14, 12, 14)) 
         pygame.draw.rect(potion_img, WHITE, (12, 6, 8, 8))
-        pygame.draw.rect(potion_img, BLACK, (10, 14, 12, 14), 2, border_radius=4)
+        pygame.draw.rect(potion_img, BLACK, (10, 14, 12, 14), 2) 
         pygame.draw.rect(potion_img, BLACK, (12, 6, 8, 8), 2)
         self.item_icons['potion'] = potion_img
         
         scroll_img = pygame.Surface((32, 32), pygame.SRCALPHA)
-        pygame.draw.rect(scroll_img, (230, 210, 170), (8, 8, 16, 20), border_radius=2)
+        pygame.draw.rect(scroll_img, (230, 210, 170), (8, 8, 16, 20)) 
         pygame.draw.rect(scroll_img, CYAN_500, (6, 12, 20, 5))
-        pygame.draw.rect(scroll_img, BLACK, (8, 8, 16, 20), 2, border_radius=2)
+        pygame.draw.rect(scroll_img, BLACK, (8, 8, 16, 20), 2) 
         self.item_icons['scroll'] = scroll_img
 
     def add_item(self, item_id, name, desc, qty=1):
@@ -257,11 +257,14 @@ class PygameApp:
         map_pixel_width = self.game_map.width * 64
         map_pixel_height = self.game_map.height * 64
         
-        if exit_side == 'right': self.map_player_pos = [64, 13 * 64]
-        elif exit_side == 'left': self.map_player_pos = [map_pixel_width - 128, 13 * 64]
-        elif exit_side == 'bottom': self.map_player_pos = [15 * 64, 64]
-        elif exit_side == 'top': self.map_player_pos = [15 * 64, map_pixel_height - 128]
-        elif exit_side == 'teleport': self.map_player_pos = [15 * 64, 15 * 64] 
+        clamped_x = max(64, min(self.map_player_pos[0], map_pixel_width - 128))
+        clamped_y = max(64, min(self.map_player_pos[1], map_pixel_height - 128))
+        
+        if exit_side == 'right': self.map_player_pos = [64, clamped_y]
+        elif exit_side == 'left': self.map_player_pos = [map_pixel_width - 128, clamped_y]
+        elif exit_side == 'bottom': self.map_player_pos = [clamped_x, 64]
+        elif exit_side == 'top': self.map_player_pos = [clamped_x, map_pixel_height - 128]
+        elif exit_side == 'teleport': self.map_player_pos = [14 * 64, 15 * 64] 
             
         self.game_map.ensure_safe_spawn(self.map_player_pos[0], self.map_player_pos[1])
         self.facing_left_overworld = False
@@ -380,7 +383,7 @@ class PygameApp:
                 if hasattr(self, 'game_map'): self.game_map.save_map()
                 self.gm.export_data_to_csv(); pygame.quit(); sys.exit()
                 
-            if self.state in [STATE_OVERWORLD]: 
+            if self.state == STATE_OVERWORLD: 
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     slot_idx = self.get_hovered_slot(event.pos)
                     if slot_idx is not None and self.inventory[slot_idx]:
@@ -479,7 +482,7 @@ class PygameApp:
                             
             elif self.state == STATE_SHOP:
                 if event.type == pygame.KEYDOWN:
-                    if event.key in (pygame.K_ESCAPE, pygame.K_SPACE):
+                    if event.key in (pygame.K_ESCAPE, pygame.K_SPACE, pygame.K_RETURN):
                         self.state = STATE_OVERWORLD
                     elif event.key == pygame.K_1:
                         if self.gold >= 50 and self.add_item('potion', 'Health Potion', 'Heals 50 HP', 1):
@@ -621,8 +624,8 @@ class PygameApp:
             r, c = (i - start_idx) // cols, (i - start_idx) % cols
             rect = pygame.Rect(start_x + c*(box+margin), grid_y + r*(box+margin), box, box)
             is_sel = (i == self.selections[cat])
-            pygame.draw.rect(self.screen, SLATE_800 if is_sel else (20, 30, 50), rect, border_radius=8)
-            pygame.draw.rect(self.screen, CYAN_400 if is_sel else SLATE_700, rect, 2 if is_sel else 1, border_radius=8)
+            pygame.draw.rect(self.screen, SLATE_800 if is_sel else (20, 30, 50), rect) 
+            pygame.draw.rect(self.screen, CYAN_400 if is_sel else SLATE_700, rect, 2 if is_sel else 1) 
             if opts[i]:
                 img = self.sprite_sheet.get_image_by_grid(opts[i][0], opts[i][1], 2)
                 self.screen.blit(img, (rect.x + (box - img.get_width())//2, rect.y + (box - img.get_height())//2))
@@ -641,11 +644,11 @@ class PygameApp:
         btn_next = pygame.Rect(center_x + txt_w//2 + 10, page_y, 25, 25)
         
         if cur_page > 0:
-            pygame.draw.rect(self.screen, SLATE_700, btn_prev, border_radius=4)
+            pygame.draw.rect(self.screen, SLATE_700, btn_prev) 
             self.screen.blit(self.small_font.render("<", True, WHITE), (btn_prev.x+7, btn_prev.y+3))
             self.active_buttons.append({'rect': btn_prev, 'type': 'prev', 'cat': cat})
         if cur_page < total_pages - 1:
-            pygame.draw.rect(self.screen, SLATE_700, btn_next, border_radius=4)
+            pygame.draw.rect(self.screen, SLATE_700, btn_next) 
             self.screen.blit(self.small_font.render(">", True, WHITE), (btn_next.x+7, btn_next.y+3))
             self.active_buttons.append({'rect': btn_next, 'type': 'next', 'cat': cat})
 
@@ -665,16 +668,16 @@ class PygameApp:
         self.screen.blit(self.player_preview_img, (px - self.player_preview_img.get_width()//2, py - self.player_preview_img.get_height() + 20))
         
         panel = pygame.Rect(330, 40, 440, 530)
-        pygame.draw.rect(self.screen, (15, 23, 42, 180), panel, border_radius=16)
-        pygame.draw.rect(self.screen, SLATE_700, panel, 2, border_radius=16)
+        pygame.draw.rect(self.screen, (15, 23, 42, 180), panel) 
+        pygame.draw.rect(self.screen, SLATE_700, panel, 2) 
         
         ty = 65
         for i, tab in enumerate(self.tabs):
             is_act = (self.current_tab == tab)
             rect = pygame.Rect(345, ty, 120, 48)
             if is_act:
-                pygame.draw.rect(self.screen, SLATE_800, rect, border_radius=8)
-                pygame.draw.rect(self.screen, CYAN_400, (rect.x, rect.y, 4, rect.height), border_top_left_radius=8, border_bottom_left_radius=8)
+                pygame.draw.rect(self.screen, SLATE_800, rect) 
+                pygame.draw.rect(self.screen, CYAN_400, (rect.x, rect.y, 4, rect.height)) 
             self.screen.blit(self.small_font.render(self.tab_names[i], True, CYAN_400 if is_act else SLATE_400), (rect.x + 15, rect.y + 16))
             self.active_buttons.append({'rect': rect, 'type': 'tab', 'tab': tab})
             ty += 62
@@ -682,7 +685,7 @@ class PygameApp:
         pygame.draw.line(self.screen, SLATE_700, (475, 60), (475, 540), 2)
         self.draw_category_ui(self.current_tab, 495, 60)
         
-        pygame.draw.rect(self.screen, CYAN_500, self.start_btn_rect, border_radius=12)
+        pygame.draw.rect(self.screen, CYAN_500, self.start_btn_rect) 
         btn_txt = self.btn_font.render("START JOURNEY >", True, BLACK)
         self.screen.blit(btn_txt, (self.start_btn_rect.centerx - btn_txt.get_width()//2, self.start_btn_rect.centery - btn_txt.get_height()//2))
 
@@ -753,8 +756,8 @@ class PygameApp:
                 rect = pygame.Rect(start_x + c * (slot_size + padding), inv_start_y + r * (slot_size + padding), slot_size, slot_size)
                 
                 s = pygame.Surface((slot_size, slot_size), pygame.SRCALPHA)
-                pygame.draw.rect(s, slot_bg, s.get_rect(), border_radius=6)
-                pygame.draw.rect(s, border_color, s.get_rect(), 1, border_radius=6)
+                pygame.draw.rect(s, slot_bg, s.get_rect()) 
+                pygame.draw.rect(s, border_color, s.get_rect(), 1) 
                 surface.blit(s, (rect.x, rect.y))
                 
                 item = self.inventory[idx]
@@ -767,8 +770,8 @@ class PygameApp:
             rect = pygame.Rect(start_x + i * (slot_size + padding), hotbar_start_y, slot_size, slot_size)
             
             s = pygame.Surface((slot_size, slot_size), pygame.SRCALPHA)
-            pygame.draw.rect(s, slot_bg, s.get_rect(), border_radius=6)
-            pygame.draw.rect(s, border_color, s.get_rect(), 1, border_radius=6)
+            pygame.draw.rect(s, slot_bg, s.get_rect()) 
+            pygame.draw.rect(s, border_color, s.get_rect(), 1) 
             surface.blit(s, (rect.x, rect.y))
             
             surface.blit(self.tiny_font.render(str(i+1), True, SLATE_400), (rect.x+4, rect.y+2))
@@ -800,16 +803,16 @@ class PygameApp:
         
         if nearby_statue:
             prompt_box = pygame.Surface((220, 36), pygame.SRCALPHA)
-            pygame.draw.rect(prompt_box, (15, 23, 42, 180), prompt_box.get_rect(), border_radius=8)
-            pygame.draw.rect(prompt_box, (123, 165, 172, 100), prompt_box.get_rect(), 1, border_radius=8)
+            pygame.draw.rect(prompt_box, (15, 23, 42, 180), prompt_box.get_rect()) 
+            pygame.draw.rect(prompt_box, (123, 165, 172, 100), prompt_box.get_rect(), 1) 
             self.screen.blit(prompt_box, (player_screen_x - 70, player_screen_y - 45))
             self.screen.blit(self.small_font.render("Press SPACE to Battle", True, WHITE), (player_screen_x - 55, player_screen_y - 37))
         
         nearby_npc = self.game_map.get_nearby_npc(player_rect)
         if nearby_npc and not self.showing_dialogue:
             prompt_box = pygame.Surface((180, 36), pygame.SRCALPHA)
-            pygame.draw.rect(prompt_box, (15, 23, 42, 180), prompt_box.get_rect(), border_radius=8)
-            pygame.draw.rect(prompt_box, (123, 165, 172, 100), prompt_box.get_rect(), 1, border_radius=8)
+            pygame.draw.rect(prompt_box, (15, 23, 42, 180), prompt_box.get_rect()) 
+            pygame.draw.rect(prompt_box, (123, 165, 172, 100), prompt_box.get_rect(), 1) 
             self.screen.blit(prompt_box, (player_screen_x - 50, player_screen_y - 45))
             self.screen.blit(self.small_font.render("Press F to Talk", True, CYAN_400), (player_screen_x - 30, player_screen_y - 37))
         
@@ -819,8 +822,8 @@ class PygameApp:
             hovering_dialogue = dialogue_box.collidepoint(mx, my)
             
             s = pygame.Surface((dialogue_box.width, dialogue_box.height), pygame.SRCALPHA)
-            pygame.draw.rect(s, (15, 23, 42, 180), s.get_rect(), border_radius=12)
-            pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1, border_radius=12)
+            pygame.draw.rect(s, (15, 23, 42, 180), s.get_rect()) 
+            pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1) 
             self.screen.blit(s, dialogue_box.topleft)
             
             npc_name = self.current_npc.data.get('name', 'Stranger')
@@ -844,9 +847,9 @@ class PygameApp:
             box_x, box_y = 20, 20
             
             bg_surface = pygame.Surface((box_width, box_height), pygame.SRCALPHA)
-            pygame.draw.rect(bg_surface, (15, 23, 42, 200), bg_surface.get_rect(), border_radius=20)
+            pygame.draw.rect(bg_surface, (15, 23, 42, 200), bg_surface.get_rect()) 
             self.screen.blit(bg_surface, (box_x, box_y))
-            pygame.draw.rect(self.screen, custom_cyan, (box_x, box_y, box_width, box_height), 1, border_radius=20)
+            pygame.draw.rect(self.screen, custom_cyan, (box_x, box_y, box_width, box_height), 1) 
             pygame.draw.circle(self.screen, AMBER_500, (box_x + 20, box_y + box_height // 2), 6)
             self.screen.blit(statue_text, (box_x + 36, box_y + (box_height - statue_text.get_height()) // 2))
             
@@ -856,9 +859,9 @@ class PygameApp:
         gold_y = 20
         
         bg_surface_gold = pygame.Surface((gold_width, 40), pygame.SRCALPHA)
-        pygame.draw.rect(bg_surface_gold, (15, 23, 42, 200), bg_surface_gold.get_rect(), border_radius=20)
+        pygame.draw.rect(bg_surface_gold, (15, 23, 42, 200), bg_surface_gold.get_rect()) 
         self.screen.blit(bg_surface_gold, (gold_x, gold_y))
-        pygame.draw.rect(self.screen, custom_cyan, (gold_x, gold_y, gold_width, 40), 1, border_radius=20)
+        pygame.draw.rect(self.screen, custom_cyan, (gold_x, gold_y, gold_width, 40), 1) 
         pygame.draw.circle(self.screen, EMERALD_500, (gold_x + 20, gold_y + 20), 6)
         self.screen.blit(gold_text, (gold_x + 36, gold_y + (40 - gold_text.get_height()) // 2))
 
@@ -882,83 +885,66 @@ class PygameApp:
     def draw_shop(self):
         self.draw_overworld()
         overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 150))
+        overlay.fill((0, 0, 0, 150)) 
         self.screen.blit(overlay, (0, 0))
         
-        box = pygame.Rect(180, 150, 440, 260)
+        box = pygame.Rect(180, 80, 440, 260) 
         s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
-        pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect(), border_radius=12)
-        pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1, border_radius=12)
+        pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect()) 
+        pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1) 
         self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.font.render("MERCHANT'S SHOP", True, AMBER_500), (210, 170))
-        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (210, 210))
+        self.screen.blit(self.font.render("MERCHANT'S SHOP", True, AMBER_500), (210, 100))
+        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (210, 140))
         
         potions_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'potion'])
         scrolls_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'scroll'])
         
         mx, my = pygame.mouse.get_pos()
         
-        self.shop_potion_rect = pygame.Rect(200, 240, 400, 50)
+        self.shop_potion_rect = pygame.Rect(200, 170, 400, 50)
         p_hover = self.shop_potion_rect.collidepoint(mx, my)
-        pygame.draw.rect(self.screen, (255,255,255, 20) if p_hover else (0,0,0,0), self.shop_potion_rect, border_radius=8)
-        self.screen.blit(self.btn_font.render("[1] Health Potion (50G)", True, EMERALD_500 if p_hover else EMERALD_400), (210, 245))
-        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, WHITE if p_hover else SLATE_400), (210, 270))
+        pygame.draw.rect(self.screen, (255,255,255, 20) if p_hover else (0,0,0,0), self.shop_potion_rect) 
+        self.screen.blit(self.btn_font.render("[1] Health Potion (50G)", True, EMERALD_500 if p_hover else EMERALD_400), (210, 175))
+        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, WHITE if p_hover else SLATE_400), (210, 200))
         
-        self.shop_scroll_rect = pygame.Rect(200, 300, 400, 50)
+        self.shop_scroll_rect = pygame.Rect(200, 230, 400, 50)
         s_hover = self.shop_scroll_rect.collidepoint(mx, my)
-        pygame.draw.rect(self.screen, (255,255,255, 20) if s_hover else (0,0,0,0), self.shop_scroll_rect, border_radius=8)
-        self.screen.blit(self.btn_font.render("[2] Hint Scroll (50G)", True, CYAN_500 if s_hover else CYAN_400), (210, 305))
-        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, WHITE if s_hover else SLATE_400), (210, 330))
+        pygame.draw.rect(self.screen, (255,255,255, 20) if s_hover else (0,0,0,0), self.shop_scroll_rect) 
+        self.screen.blit(self.btn_font.render("[2] Hint Scroll (50G)", True, CYAN_500 if s_hover else CYAN_400), (210, 235))
+        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, WHITE if s_hover else SLATE_400), (210, 260))
         
-        self.shop_exit_rect = pygame.Rect(200, 365, 400, 30)
+        self.shop_exit_rect = pygame.Rect(200, 295, 400, 30)
         e_hover = self.shop_exit_rect.collidepoint(mx, my)
-        self.screen.blit(self.small_font.render("[ESC] / Click here to leave", True, RED_500 if e_hover else GRAY), (210, 370))
+        self.screen.blit(self.small_font.render("[ESC] / Click here to leave", True, RED_500 if e_hover else GRAY), (210, 300))
 
     def draw_upgrade(self):
         self.draw_overworld()
         overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 150))
+        overlay.fill((0, 0, 0, 150)) 
         self.screen.blit(overlay, (0, 0))
         
-        box = pygame.Rect(150, 150, 500, 260)
+        box = pygame.Rect(150, 80, 500, 260)
         s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
-        pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect(), border_radius=12)
-        pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1, border_radius=12)
+        pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect()) 
+        pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1) 
         self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.font.render("STATUE DESTROYED!", True, AMBER_500), (180, 170))
-        self.screen.blit(self.small_font.render("The gods grant you a blessing. Choose your upgrade:", True, WHITE), (180, 210))
+        self.screen.blit(self.font.render("STATUE DESTROYED!", True, AMBER_500), (180, 100))
+        self.screen.blit(self.small_font.render("Blessing received! Choose an upgrade:", True, WHITE), (180, 140))
         
         mx, my = pygame.mouse.get_pos()
-        
-        self.upg_ares_rect = pygame.Rect(170, 240, 460, 50)
+        self.upg_ares_rect = pygame.Rect(170, 170, 460, 50)
         a_hover = self.upg_ares_rect.collidepoint(mx, my)
-        pygame.draw.rect(self.screen, (255,255,255, 20) if a_hover else (0,0,0,0), self.upg_ares_rect, border_radius=8)
-        self.screen.blit(self.btn_font.render("[1] Power of Ares (ATK +5)", True, RED_500), (180, 245))
-        self.screen.blit(self.small_font.render(f"Current ATK: {self.base_atk}", True, WHITE if a_hover else SLATE_400), (180, 270))
+        pygame.draw.rect(self.screen, (255,255,255, 20) if a_hover else (0,0,0,0), self.upg_ares_rect) 
+        self.screen.blit(self.btn_font.render("[1] Ares' Power (Attack +5)", True, RED_500), (180, 175))
+        self.screen.blit(self.small_font.render(f"Current Base ATK: {self.player.base_attack}", True, WHITE if a_hover else SLATE_400), (180, 200))
         
-        self.upg_demeter_rect = pygame.Rect(170, 300, 460, 50)
+        self.upg_demeter_rect = pygame.Rect(170, 230, 460, 50)
         d_hover = self.upg_demeter_rect.collidepoint(mx, my)
-        pygame.draw.rect(self.screen, (255,255,255, 20) if d_hover else (0,0,0,0), self.upg_demeter_rect, border_radius=8)
-        self.screen.blit(self.btn_font.render("[2] Vitality of Demeter (MAX HP +20 & Full Heal)", True, EMERALD_400), (180, 305))
-        self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, WHITE if d_hover else SLATE_400), (180, 330))
-
-    def draw_modern_hp_bar(self, surface, x, y, curr, max_hp, fill, name):
-        panel_w = 300
-        pygame.draw.rect(surface, (15, 23, 42, 220), (x, y, panel_w, 80), border_radius=12)
-        
-        name_surf = self.name_font.render(name, True, WHITE)
-        surface.blit(name_surf, (x + 15, y + 20))
-        
-        ratio = max(0.0, min(1.0, curr / max_hp))
-        pct = int(ratio * 100)
-        txt = self.small_font.render(f"{curr}/{max_hp} ({pct}%)", True, SLATE_400)
-        surface.blit(txt, (x + panel_w - 15 - txt.get_width(), y + 30))
-        
-        bx, by, bw, bh = x + 15, y + 50, panel_w - 30, 16
-        pygame.draw.rect(surface, BLACK, (bx, by, bw, bh), border_radius=8)
-        if ratio > 0: pygame.draw.rect(surface, fill, (bx, by, int(bw * ratio), bh), border_radius=8)
+        pygame.draw.rect(self.screen, (255,255,255, 20) if d_hover else (0,0,0,0), self.upg_demeter_rect) 
+        self.screen.blit(self.btn_font.render("[2] Demeter's Vitality (HP +20 & Heal)", True, EMERALD_400), (180, 235))
+        self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, WHITE if d_hover else SLATE_400), (180, 260))
 
     def draw_battle(self):
         shake_x = random.randint(-self.shake_amount, self.shake_amount) if self.shake_timer > 0 else 0
@@ -988,9 +974,21 @@ class PygameApp:
         battle_surf.blit(self.enemy_battle_img, (self.enemy_battle_pos[0] + self.e_anim_x, self.enemy_battle_pos[1] + fo))
         battle_surf.blit(self.player_battle_img, (self.player_battle_pos[0] + self.p_anim_x, self.player_battle_pos[1] - fo))
         
-        self.draw_modern_hp_bar(battle_surf, 40, 30, self.enemy.current_hp, self.enemy.max_hp, RED_500, self.enemy.name)
-        self.draw_modern_hp_bar(battle_surf, 460, 320, self.player.hp, self.player_max_hp, EMERALD_500, "Player")
-        
+        for idx, (p_pos, p_max_hp, p_hp, p_fill, p_name) in enumerate([((40, 30), self.enemy.max_hp, self.enemy.current_hp, RED_500, self.enemy.name.upper()), ((460, 320), self.player_max_hp, self.player.hp, EMERALD_500, "PLAYER")]):
+            panel_w = 300
+            pygame.draw.rect(battle_surf, (15, 23, 42, 220), (p_pos[0], p_pos[1], panel_w, 80)) 
+            
+            name_surf = self.small_font.render(p_name, True, WHITE) 
+            battle_surf.blit(name_surf, (p_pos[0] + 15, p_pos[1] + 15)) 
+            
+            ratio = max(0, p_hp) / p_max_hp
+            txt = self.small_font.render(f"{max(0, p_hp)}/{p_max_hp} HP", True, SLATE_400)
+            battle_surf.blit(txt, (p_pos[0] + panel_w - 15 - txt.get_width(), p_pos[1] + 15))
+            
+            bx, by, bw, bh = p_pos[0] + 15, p_pos[1] + 45, panel_w - 30, 20
+            pygame.draw.rect(battle_surf, BLACK, (bx, by, bw, bh)) 
+            if ratio > 0: pygame.draw.rect(battle_surf, p_fill, (bx, by, int(bw * ratio), bh)) 
+
         if self.player.combo_count > 0:
             bonus_dmg = int(self.player.combo_count * 20)
             combo_txt = self.btn_font.render(f"COMBO x{self.player.combo_count} (ATK +{bonus_dmg}%)", True, AMBER_400)
@@ -1021,61 +1019,67 @@ class PygameApp:
             self.crit_timer -= 1 
 
         board_start_y = 440
-        pygame.draw.rect(battle_surf, (15, 23, 42, 240), (0, board_start_y, 800, 160))
+        pygame.draw.rect(battle_surf, (15, 23, 42, 240), (0, board_start_y, 800, 160)) 
         pygame.draw.line(battle_surf, SLATE_700, (0, board_start_y), (800, board_start_y), 2)
 
         total_potions = sum([item['qty'] for item in self.inventory if item and item['id'] == 'potion'])
         total_scrolls = sum([item['qty'] for item in self.inventory if item and item['id'] == 'scroll'])
         
         if not self.gm.game_over:
-            battle_surf.blit(self.small_font.render(f"[1] Potion ({total_potions})   [2] Hint Scroll ({total_scrolls})   [ESC] Flee", True, SLATE_400), (20, board_start_y - 25))
+            flee_surf = self.tiny_font.render(f"PRESS [ESC] TO FLEE (LOST COMBO) | [1] POTION ({total_potions}) | [2] HINT SCROLL ({total_scrolls})", True, SLATE_400)
+            battle_surf.blit(flee_surf, (20, board_start_y - 25))
 
+        box, m = 50, 10
+        cx = (800 - (box*5 + m*4)) // 2
+        cy = board_start_y + 45
+        
         if self.board.current_attempt >= 4 and not self.gm.game_over:
             hint = f"Ehm.. maybe it's: '{self.dictionary.get_current_hint()}'"
             if len(hint) > 75: hint = hint[:72] + "..."
             hs = self.small_font.render(hint, True, BLACK)
             br = hs.get_rect(midbottom=(self.player_battle_pos[0] + 120, self.player_battle_pos[1] - 20))
-            pygame.draw.rect(battle_surf, WHITE, br.inflate(20, 15), border_radius=10)
-            pygame.draw.rect(battle_surf, EMERALD_500, br.inflate(20, 15), 2, border_radius=10)
+            pygame.draw.rect(battle_surf, WHITE, br.inflate(20, 15)) 
+            pygame.draw.rect(battle_surf, EMERALD_500, br.inflate(20, 15), 2) 
             battle_surf.blit(hs, br)
 
         battle_surf.blit(self.small_font.render("ABSENT", True, SLATE_700), (40, board_start_y + 15))
         absent_x, absent_y = 40, board_start_y + 40
         for i, char in enumerate(sorted(list(self.absent_letters))):
             r, c = i // 6, i % 6
-            pygame.draw.rect(battle_surf, BLACK, (absent_x + c*25, absent_y + r*25, 20, 20), border_radius=4)
+            pygame.draw.rect(battle_surf, BLACK, (absent_x + c*25, absent_y + r*25, 20, 20)) 
             battle_surf.blit(self.small_font.render(char, True, SLATE_700), (absent_x + c*25 + 6, absent_y + r*25 + 3))
 
-        box, m = 50, 10
-        cx = (800 - (box*5 + m*4)) // 2
-        cy = board_start_y + 45
         for col in range(5):
             x = cx + col * (box + m)
             char = self.current_guess[col] if col < len(self.current_guess) else ""
             is_active = (col == len(self.current_guess) and not self.gm.game_over)
-            pygame.draw.rect(battle_surf, SLATE_800 if char else BLACK, (x, cy, box, box), border_radius=8)
-            pygame.draw.rect(battle_surf, CYAN_400 if is_active else SLATE_700, (x, cy, box, box), 2 if not is_active else 3, border_radius=8)
+            
+            pygame.draw.rect(battle_surf, SLATE_800 if char else BLACK, (x, cy, box, box)) 
+            
             if char:
                 t = self.font.render(char, True, WHITE)
-                battle_surf.blit(t, t.get_rect(center=(x+box//2, cy+box//2)))
+                t_rect = t.get_rect(center=(x + box // 2, cy + box // 2))
+                battle_surf.blit(t, t_rect)
+            
+            pygame.draw.rect(battle_surf, CYAN_400 if is_active else SLATE_700, (x, cy, box, box), 2 if not is_active else 3) 
 
         battle_surf.blit(self.small_font.render("BEST KNOWN", True, EMERALD_500), (580, board_start_y + 15))
         right_x, right_y = 580, board_start_y + 40
         for i in range(5):
             rx = right_x + i*30
             c_char = self.green_letters[i]
-            pygame.draw.rect(battle_surf, EMERALD_500 if c_char else SLATE_800, (rx, right_y, 25, 25), border_radius=4)
+            pygame.draw.rect(battle_surf, EMERALD_500 if c_char else SLATE_800, (rx, right_y, 25, 25)) 
             if c_char: battle_surf.blit(self.small_font.render(c_char, True, BLACK), (rx + 7, right_y + 5))
         
         if self.yellow_letters:
             battle_surf.blit(self.small_font.render("PRESENT:", True, AMBER_500), (right_x, right_y + 40))
             for i, char in enumerate(sorted(list(self.yellow_letters))):
-                pygame.draw.rect(battle_surf, AMBER_500, (right_x + 75 + i*25, right_y + 35, 20, 20), border_radius=4)
+                pygame.draw.rect(battle_surf, AMBER_500, (right_x + 75 + i*25, right_y + 35, 20, 20)) 
                 battle_surf.blit(self.small_font.render(char, True, BLACK), (right_x + 75 + i*25 + 5, right_y + 38))
 
         if self.gm.game_over:
             msg = "VICTORY!" if self.enemy.current_hp <= 0 else "DEFEATED!"
-            msg_color = EMERALD_400 if msg == "VICTORY!" else RED_500
+            msg_color = EMERALD_400 if self.enemy.current_hp <= 0 else RED_500
             
             txt_surface = self.large_font.render(msg, True, msg_color)
             txt_rect = txt_surface.get_rect(center=(self.screen_width // 2, 280))
