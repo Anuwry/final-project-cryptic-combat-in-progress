@@ -10,7 +10,9 @@ class TileType:
     GRASS = 0
     DIRT = 1
     GRASS_FLOWER = 2
-    WATER = 3
+    STONE = 3
+    WATER = 4
+    BRIDGE = 5
 
 class MapObject:
     def __init__(self, x, y, obj_type, data=None, collected=False):
@@ -24,6 +26,8 @@ class MapObject:
             self.rect = pygame.Rect(x, y, 192, 192) 
         elif self.type in ['tree_green', 'tree_orange']:
             self.rect = pygame.Rect(x + 16, y + 64, 32, 64) 
+        elif self.type == 'statue' and self.data.get('tier') == 'Boss':
+            self.rect = pygame.Rect(x - 32, y - 32, 128, 128) 
         else:
             self.rect = pygame.Rect(x, y, 64, 64)
             
@@ -35,10 +39,11 @@ class GameMap:
         self.realm_x = realm_x
         self.realm_y = realm_y
         self.level = abs(realm_x) + abs(realm_y) + 1
+        self.is_boss_realm = (self.level > 1 and self.level % 5 == 0)
         self.map_file = os.path.join(BASE_DIR, f"data/maps/realm_{realm_x}_{realm_y}.json")
         self.tile_size = 64
-        self.width = 0
-        self.height = 0
+        self.width = 32
+        self.height = 24
         self.grid = []
         self.objects = []
         self.spawn_point = [100, 100]
@@ -47,6 +52,7 @@ class GameMap:
         
         self.tiles = {}
         self.prefabs = {}
+        self.gods = ["Zeus", "Poseidon", "Hades", "Ares", "Athena", "Apollo", "Hermes"]
         self.load_tileset()
         self.load_map()
         
@@ -63,6 +69,8 @@ class GameMap:
 
             self.tiles['grass'] = get_tile(0, 0)
             self.tiles['grass_flower'] = get_tile(2, 0)
+            self.tiles['stone'] = get_tile(0, 8)
+            self.tiles['bridge'] = get_tile(8, 5)
             
             self.tiles['dirt'] = {
                 'tl': get_tile(0, 1), 'tm': get_tile(1, 1), 'tr': get_tile(2, 1),
@@ -98,8 +106,8 @@ class GameMap:
         try:
             with open(self.map_file, 'r') as f:
                 data = json.load(f)
-            self.width = data['width']
-            self.height = data['height']
+            self.width = data.get('width', 32)
+            self.height = data.get('height', 24)
             self.tile_size = data.get('tile_size', 64)
             self.grid = data['grid']
             self.spawn_point = data.get('spawn_point', [100, 100])
@@ -107,21 +115,13 @@ class GameMap:
         except FileNotFoundError:
             if self.realm_x == 0 and self.realm_y == 0:
                 self._create_main_hub_map()
+            elif self.is_boss_realm:
+                self._create_boss_map()
             else:
-                self.generate_random_map()
+                self._generate_smart_realm()
             self.save_map()
             
     def ensure_safe_spawn(self, x, y):
-        center_gx = int((x + 32) // self.tile_size)
-        center_gy = int((y + 32) // self.tile_size)
-        
-        for dy in [-1, 0, 1]:
-            for dx in [-1, 0, 1]:
-                nx, ny = center_gx + dx, center_gy + dy
-                if 0 <= nx < self.width and 0 <= ny < self.height:
-                    if self.grid[ny][nx] == TileType.WATER:
-                        self.grid[ny][nx] = TileType.DIRT
-                        
         player_rect = pygame.Rect(x - 32, y - 32, 128, 128)
         safe_objects = []
         for obj in self.objects:
@@ -133,152 +133,123 @@ class GameMap:
         self.objects = safe_objects
 
     def _create_main_hub_map(self):
-        self.width, self.height = 30, 24
+        self.width, self.height = 32, 24
         self.grid = [[TileType.GRASS_FLOWER if random.random() < 0.1 else TileType.GRASS 
                       for _ in range(self.width)] for _ in range(self.height)]
-        
         self.objects = []
         
-        # ปรับจตุรัสกลางเมืองเป็น DIRT
         for y in range(10, 18):
-            for x in range(11, 19):
-                self.grid[y][x] = TileType.DIRT
+            for x in range(12, 20): self.grid[y][x] = TileType.DIRT
                 
         for y in range(self.height):
-            self.grid[y][14] = TileType.DIRT
-            self.grid[y][15] = TileType.DIRT
+            self.grid[y][15] = TileType.DIRT; self.grid[y][16] = TileType.DIRT
         for x in range(self.width):
-            self.grid[13][x] = TileType.DIRT
-            self.grid[14][x] = TileType.DIRT
+            self.grid[13][x] = TileType.DIRT; self.grid[14][x] = TileType.DIRT
 
-        # แม่น้ำและสะพานดิน
         for x in range(self.width):
-            if x not in (14, 15):
-                self.grid[4][x] = TileType.WATER
-                self.grid[5][x] = TileType.WATER
+            if x not in (15, 16):
+                self.grid[4][x] = TileType.WATER; self.grid[5][x] = TileType.WATER
             else:
-                self.grid[4][x] = TileType.DIRT 
-                self.grid[5][x] = TileType.DIRT
+                self.grid[4][x] = TileType.DIRT; self.grid[5][x] = TileType.DIRT
 
-        self.objects.append(MapObject(8 * 64, 6 * 64, "house_grey"))
-        self.objects.append(MapObject(19 * 64, 6 * 64, "house_red"))
-        self.objects.append(MapObject(8 * 64, 17 * 64, "house_red"))
-        self.objects.append(MapObject(19 * 64, 17 * 64, "house_grey"))
+        self.objects.append(MapObject(9 * 64, 6 * 64, "house_grey"))
+        self.objects.append(MapObject(20 * 64, 6 * 64, "house_red"))
+        self.objects.append(MapObject(9 * 64, 17 * 64, "house_red"))
+        self.objects.append(MapObject(20 * 64, 17 * 64, "house_grey"))
         
-        self.objects.append(MapObject(14 * 64, 11 * 64, "statue"))
-        self.objects.append(MapObject(15 * 64, 11 * 64, "statue"))
+        self.objects.append(MapObject(15 * 64, 11 * 64, "statue", {"god": "Athena", "tier": "Follower"}))
+        self.objects.append(MapObject(16 * 64, 11 * 64, "statue", {"god": "Apollo", "tier": "Follower"}))
         
-        self.objects.append(MapObject(14 * 64, 15 * 64, "npc", {
-            "name": "Grand Elder", 
-            "dialogue": "Welcome to the Sanctuary! Walk to any edge of the map to explore endless realms."
-        }))
-        self.objects.append(MapObject(13 * 64, 7 * 64, "npc", {
-            "name": "Bridge Guard", 
-            "dialogue": "Beyond the river lies danger. Be prepared, warrior!"
-        }))
+        self.objects.append(MapObject(15 * 64, 15 * 64, "npc", {"name": "Grand Elder", "dialogue": "Welcome to the Sanctuary! Walk to any edge of the map to explore endless realms."}))
+        self.objects.append(MapObject(16 * 64, 10 * 64, "npc", {"name": "Merchant", "dialogue": "SHOP"}))
 
+        self.spawn_point = [15 * 64, 15 * 64]
+        self._populate_decorations()
+        
+    def _create_boss_map(self):
+        self.width, self.height = 32, 24
+        self.grid = [[TileType.STONE for _ in range(self.width)] for _ in range(self.height)]
+        self.objects = []
+        
         for y in range(self.height):
             for x in range(self.width):
-                if self.grid[y][x] in (TileType.GRASS, TileType.GRASS_FLOWER):
-                    if x < 2 or x > 27 or y < 2 or y > 21:
-                        if x not in (13,14,15,16) and y not in (12,13,14,15):
-                            if random.random() < 0.7: 
-                                self.objects.append(MapObject(x * 64, (y-1) * 64, random.choice(["tree_green", "tree_orange"])))
-
-        self.spawn_point = [14 * 64, 15 * 64]
+                if (x < 8 or x > self.width - 9) or (y < 6 or y > self.height - 7):
+                    if x not in (15, 16) and y not in (11, 12, 13, 14):
+                        self.grid[y][x] = TileType.WATER
+                
+        god = random.choice(self.gods)
+        self.objects.append(MapObject(15 * 64, 10 * 64, "statue", {"god": god, "tier": "Boss"}))
+        self.spawn_point = [15 * 64, 20 * 64]
             
-    def generate_random_map(self):
-        self.width = random.randint(25, 35)
-        self.height = random.randint(20, 26)
+    def _generate_smart_realm(self):
+        self.width, self.height = 32, 24
         self.grid = [[TileType.GRASS_FLOWER if random.random() < 0.1 else TileType.GRASS 
                       for _ in range(self.width)] for _ in range(self.height)]
-        
         self.objects = []
-        occupied = set()
         
-        theme = random.choice(['dirt_village', 'river_crossing'])
-        path_tile = TileType.DIRT
-        house_style = random.choice(['house_red', 'house_grey'])
+        theme = random.choice(['crossroad', 'horizontal', 'vertical', 'river_cross'])
         
-        path_y = random.randint(5, self.height - 7)
-        for x in range(self.width):
-            self.grid[path_y][x] = path_tile
-            self.grid[path_y+1][x] = path_tile
-            occupied.add((x, path_y))
-            occupied.add((x, path_y+1))
-            
-        path_x = random.randint(5, self.width - 7)
-        for y in range(self.height):
-            self.grid[y][path_x] = path_tile
-            self.grid[y][path_x+1] = path_tile
-            occupied.add((path_x, y))
-            occupied.add((path_x+1, y))
+        if theme in ['crossroad', 'horizontal', 'river_cross']:
+            for x in range(self.width):
+                self.grid[13][x] = TileType.DIRT
+                self.grid[14][x] = TileType.DIRT
+        
+        if theme in ['crossroad', 'vertical', 'river_cross']:
+            for y in range(self.height):
+                self.grid[y][15] = TileType.DIRT
+                self.grid[y][16] = TileType.DIRT
                 
-        if theme == 'river_crossing':
-            river_dir = random.choice(['horizontal', 'vertical'])
-            if river_dir == 'vertical':
-                river_x = random.randint(2, self.width - 4)
-                while abs(river_x - path_x) < 5: river_x = random.randint(2, self.width - 4)
-                for y in range(self.height):
-                    # ถ้าเจอทางเดินดิน ให้ทับด้วยทางเดินดินเป็นสะพาน
-                    if self.grid[y][river_x] == path_tile or self.grid[y][river_x+1] == path_tile:
-                        self.grid[y][river_x] = TileType.DIRT
-                        self.grid[y][river_x+1] = TileType.DIRT
-                    else:
-                        self.grid[y][river_x] = TileType.WATER
-                        self.grid[y][river_x+1] = TileType.WATER
-                    occupied.add((river_x, y))
-                    occupied.add((river_x+1, y))
-            else:
-                river_y = random.randint(2, self.height - 4)
-                while abs(river_y - path_y) < 5: river_y = random.randint(2, self.height - 4)
+        if theme == 'river_cross':
+            is_horizontal_river = random.choice([True, False])
+            if is_horizontal_river:
+                ry = random.choice([5, 6, 18, 19])
                 for x in range(self.width):
-                    if self.grid[river_y][x] == path_tile or self.grid[river_y+1][x] == path_tile:
-                        self.grid[river_y][x] = TileType.DIRT
-                        self.grid[river_y+1][x] = TileType.DIRT
+                    if self.grid[ry][x] == TileType.DIRT: pass
                     else:
-                        self.grid[river_y][x] = TileType.WATER
-                        self.grid[river_y+1][x] = TileType.WATER
-                    occupied.add((x, river_y))
-                    occupied.add((x, river_y+1))
-                
-        self.spawn_point = [path_x * 64, path_y * 64]
+                        self.grid[ry][x] = TileType.WATER
+                        self.grid[ry+1][x] = TileType.WATER
+            else:
+                rx = random.choice([6, 7, 24, 25])
+                for y in range(self.height):
+                    if self.grid[y][rx] == TileType.DIRT: pass
+                    else:
+                        self.grid[y][rx] = TileType.WATER
+                        self.grid[y][rx+1] = TileType.WATER
         
+        self._populate_decorations(place_statues=True)
+
+    def _populate_decorations(self, place_statues=False):
         def get_free_spot(w, h):
             for _ in range(50):
                 rx, ry = random.randint(2, self.width - 2 - w), random.randint(2, self.height - 2 - h)
                 free = True
                 for dy in range(h):
                     for dx in range(w):
-                        if (rx+dx, ry+dy) in occupied: free = False; break
+                        if self.grid[ry+dy][rx+dx] not in (TileType.GRASS, TileType.GRASS_FLOWER):
+                            free = False; break
+                        check_rect = pygame.Rect((rx+dx)*64, (ry+dy)*64, 64, 64)
+                        for obj in self.objects:
+                            if obj.get_collision_rect().colliderect(check_rect):
+                                free = False; break
                     if not free: break
-                if free:
-                    for dy in range(h):
-                        for dx in range(w): occupied.add((rx+dx, ry+dy))
-                    return rx, ry
+                if free: return rx, ry
             return None
-            
-        num_houses = random.randint(0, min(3, 1 + self.level))
-        for _ in range(num_houses):
-            spot = get_free_spot(3, 3)
-            if spot: self.objects.append(MapObject(spot[0] * 64, spot[1] * 64, house_style))
-                
-        if random.random() > 0.5:
-            num_statues = random.randint(1, min(4, 1 + self.level // 2))
+
+        if place_statues and random.random() > 0.3:
+            num_statues = random.randint(1, min(3, 1 + self.level // 3))
             for _ in range(num_statues):
                 spot = get_free_spot(1, 1)
-                if spot: self.objects.append(MapObject(spot[0] * 64, spot[1] * 64, "statue"))
-                
-        spot = get_free_spot(1, 1)
-        if spot:
-            dialogues = [
-                f"You are at Realm ({self.realm_x}, {self.realm_y}).", 
-                "Follow the dirt roads to travel safely.", 
-                "Danger grows as you venture further from the Sanctuary."
-            ]
-            self.objects.append(MapObject(spot[0] * 64, spot[1] * 64, "npc", {"name": "Wanderer", "dialogue": random.choice(dialogues)}))
+                if spot:
+                    god = random.choice(self.gods)
+                    tier = random.choices(["Follower", "Zealot", "Apostle"], [60, 30, 10])[0]
+                    self.objects.append(MapObject(spot[0] * 64, spot[1] * 64, "statue", {"god": god, "tier": tier}))
+
+        num_houses = random.randint(0, min(3, self.level))
+        for _ in range(num_houses):
+            spot = get_free_spot(3, 3)
+            if spot: self.objects.append(MapObject(spot[0] * 64, spot[1] * 64, random.choice(['house_red', 'house_grey'])))
             
-        for _ in range(random.randint(15, 30)):
+        for _ in range(random.randint(30, 60)):
             spot = get_free_spot(1, 2)
             if spot: self.objects.append(MapObject(spot[0] * 64, spot[1] * 64, random.choice(['tree_green', 'tree_orange'])))
 
@@ -302,16 +273,6 @@ class GameMap:
         for o in self.objects:
             if o.type == "npc" and p_rect.colliderect(o.rect.inflate(dist, dist)): return o
         return None
-
-    def find_path_y(self):
-        for y in range(self.height):
-            if self.grid[y][0] == TileType.DIRT: return y
-        return self.height // 2
-
-    def find_path_x(self):
-        for x in range(self.width):
-            if self.grid[0][x] == TileType.DIRT: return x
-        return self.width // 2
 
     def check_collision_at(self, x, y, width, height):
         check_rect = pygame.Rect(x, y, width, height)
@@ -349,17 +310,20 @@ class GameMap:
                 if (screen_x + self.tile_size < 0 or screen_x > surface.get_width() or screen_y + self.tile_size < 0 or screen_y > surface.get_height()): continue
                 
                 tile_type = self.grid[y][x]
-                if tile_type not in [TileType.GRASS, TileType.DIRT, TileType.GRASS_FLOWER, TileType.WATER]:
+                if tile_type not in [TileType.GRASS, TileType.DIRT, TileType.GRASS_FLOWER, TileType.WATER, TileType.STONE]:
                     tile_type = TileType.GRASS
                 
                 if tile_type == TileType.GRASS: surface.blit(self.tiles['grass'], (screen_x, screen_y))
                 elif tile_type == TileType.GRASS_FLOWER: surface.blit(self.tiles['grass_flower'], (screen_x, screen_y))
+                elif tile_type == TileType.STONE: surface.blit(self.tiles['stone'], (screen_x, screen_y))
                 elif tile_type == TileType.WATER:
+                    water_color = (150, 20, 20) if self.is_boss_realm else (41, 128, 185)
+                    line_color = (200, 50, 50) if self.is_boss_realm else (74, 163, 223)
                     rect = pygame.Rect(screen_x, screen_y, self.tile_size, self.tile_size)
-                    pygame.draw.rect(surface, (41, 128, 185), rect)
+                    pygame.draw.rect(surface, water_color, rect)
                     wave_offset = math.sin(current_time * 2 + x) * 5
-                    pygame.draw.line(surface, (74, 163, 223), (screen_x + 10, screen_y + 20 + wave_offset), (screen_x + 30, screen_y + 20 + wave_offset), 2)
-                    pygame.draw.line(surface, (74, 163, 223), (screen_x + 30, screen_y + 40 - wave_offset), (screen_x + 50, screen_y + 40 - wave_offset), 2)
+                    pygame.draw.line(surface, line_color, (screen_x + 10, screen_y + 20 + wave_offset), (screen_x + 30, screen_y + 20 + wave_offset), 2)
+                    pygame.draw.line(surface, line_color, (screen_x + 30, screen_y + 40 - wave_offset), (screen_x + 50, screen_y + 40 - wave_offset), 2)
                 elif tile_type == TileType.DIRT:
                     surface.blit(self.tiles['grass'], (screen_x, screen_y))
                     n = (y > 0 and self.grid[y-1][x] == TileType.DIRT)
@@ -378,6 +342,11 @@ class GameMap:
                     else: tile = self.tiles['dirt']['mm'] 
                     surface.blit(tile, (screen_x, screen_y))
 
+        if self.is_boss_realm:
+            overlay = pygame.Surface((surface.get_width(), surface.get_height()), pygame.SRCALPHA)
+            overlay.fill((40, 0, 10, 80)) 
+            surface.blit(overlay, (0, 0))
+
         sorted_objects = sorted(self.objects, key=lambda obj: obj.y)
         
         for obj in sorted_objects:
@@ -394,12 +363,22 @@ class GameMap:
                 bounce_y = math.sin(current_time * 3 + obj.x) * 4
                 
                 if obj.type == "statue":
-                    base_rect = pygame.Rect(screen_x + 16, screen_y + 40, 32, 16)
+                    is_boss = (obj.data.get('tier') == 'Boss')
+                    scale = 2 if is_boss else 1
+                    
+                    base_rect = pygame.Rect(screen_x + 16 - (16*(scale-1)), screen_y + 40 - (10*(scale-1)), 32 * scale, 16 * scale)
                     pygame.draw.rect(surface, (120, 130, 140), base_rect, border_radius=4)
                     pygame.draw.rect(surface, (80, 90, 100), base_rect, 2, border_radius=4)
-                    crystal_y = screen_y + 20 + bounce_y
-                    pygame.draw.polygon(surface, (255, 215, 0), [(screen_x + 32, crystal_y - 12), (screen_x + 44, crystal_y), (screen_x + 32, crystal_y + 12), (screen_x + 20, crystal_y)])
-                    pygame.draw.polygon(surface, (200, 160, 0), [(screen_x + 32, crystal_y - 12), (screen_x + 44, crystal_y), (screen_x + 32, crystal_y + 12), (screen_x + 20, crystal_y)], 2)
+                    crystal_y = screen_y + 20 + bounce_y - (20*(scale-1))
+                    
+                    cx = screen_x + 32
+                    points1 = [(cx, crystal_y - 12*scale), (cx + 12*scale, crystal_y), (cx, crystal_y + 12*scale), (cx - 12*scale, crystal_y)]
+                    color = (255, 50, 50) if is_boss else (255, 215, 0)
+                    color2 = (180, 20, 20) if is_boss else (200, 160, 0)
+                    
+                    pygame.draw.polygon(surface, color, points1)
+                    pygame.draw.polygon(surface, color2, points1, 2)
+                    
                 elif obj.type == "npc":
                     npc_y = screen_y + 16 + bounce_y
                     body_rect = pygame.Rect(screen_x + 16, npc_y + 12, 32, 28)
