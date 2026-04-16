@@ -242,7 +242,7 @@ class PygameApp:
         force_normal = False
         if not os.path.exists(target_file) and is_boss_tier:
             if target_level in self.generated_boss_levels:
-                force_normal = True
+                force_normal = True  
             else:
                 self.generated_boss_levels.add(target_level)
                 
@@ -257,14 +257,11 @@ class PygameApp:
         map_pixel_width = self.game_map.width * 64
         map_pixel_height = self.game_map.height * 64
         
-        clamped_x = max(64, min(self.map_player_pos[0], map_pixel_width - 128))
-        clamped_y = max(64, min(self.map_player_pos[1], map_pixel_height - 128))
-        
-        if exit_side == 'right': self.map_player_pos = [64, clamped_y]
-        elif exit_side == 'left': self.map_player_pos = [map_pixel_width - 128, clamped_y]
-        elif exit_side == 'bottom': self.map_player_pos = [clamped_x, 64]
-        elif exit_side == 'top': self.map_player_pos = [clamped_x, map_pixel_height - 128]
-        elif exit_side == 'teleport': self.map_player_pos = [14 * 64, 15 * 64] 
+        if exit_side == 'right': self.map_player_pos = [64, 13 * 64]
+        elif exit_side == 'left': self.map_player_pos = [map_pixel_width - 128, 13 * 64]
+        elif exit_side == 'bottom': self.map_player_pos = [15 * 64, 64]
+        elif exit_side == 'top': self.map_player_pos = [15 * 64, map_pixel_height - 128]
+        elif exit_side == 'teleport': self.map_player_pos = [15 * 64, 15 * 64] 
             
         self.game_map.ensure_safe_spawn(self.map_player_pos[0], self.map_player_pos[1])
         self.facing_left_overworld = False
@@ -731,13 +728,8 @@ class PygameApp:
             target_ry -= 1; will_change = True; exit_side = 'top'
 
         if will_change:
-            target_file = os.path.join(BASE_DIR, f"data/maps/realm_{target_rx}_{target_ry}.json")
-            if os.path.exists(target_file):
-                self.change_realm(target_rx, target_ry, exit_side)
-                return
-            else:
-                self.map_player_pos[0] = old_x
-                self.map_player_pos[1] = old_y
+            self.change_realm(target_rx, target_ry, exit_side)
+            return
         
         self.game_map.update_camera(self.map_player_pos[0] + 32, self.map_player_pos[1] + 32, 
                                     self.screen_width, self.screen_height)
@@ -834,7 +826,7 @@ class PygameApp:
             npc_name = self.current_npc.data.get('name', 'Stranger')
             npc_text = self.current_npc.data.get('dialogue', 'Hello there!')
             
-            self.screen.blit(self.btn_font.render(npc_name, True, AMBER_400), (dialogue_box.x + 20, dialogue_box.y + 15))
+            self.screen.blit(self.name_font.render(npc_name, True, AMBER_400), (dialogue_box.x + 20, dialogue_box.y + 15))
             self.screen.blit(self.small_font.render(npc_text, True, WHITE), (dialogue_box.x + 20, dialogue_box.y + 50))
             
             if npc_name == 'Merchant': action_txt = "[ENTER] / Click to Shop   |   [ESC] Leave"
