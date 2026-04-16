@@ -178,7 +178,7 @@ class GameMap:
         for y in range(self.height):
             for x in range(self.width):
                 if (x < 8 or x > self.width - 9) or (y < 6 or y > self.height - 7):
-                    if x not in (15, 16) and y not in (11, 12, 13, 14):
+                    if x not in (15, 16) and y not in (13, 14):
                         self.grid[y][x] = TileType.WATER
                 
         god = random.choice(self.gods)
