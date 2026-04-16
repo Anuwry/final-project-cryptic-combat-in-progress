@@ -58,8 +58,10 @@ class GameMap:
         self.tiles = {}
         self.prefabs = {}
         self.gods = ["Zeus", "Poseidon", "Hades", "Ares", "Athena", "Apollo", "Hermes"]
-        self.load_tileset()
+        self.god_theme = None
+        
         self.load_map()
+        self.load_tileset()
         
     def load_tileset(self):
         tileset_path = os.path.join(BASE_DIR, "assets", "images", "tilemap.png")
@@ -75,7 +77,7 @@ class GameMap:
             self.tiles['grass'] = get_tile(0, 0)
             self.tiles['grass_flower'] = get_tile(2, 0)
             self.tiles['stone'] = get_tile(0, 8)
-            self.tiles['bridge'] = get_tile(8, 5)
+            self.tiles['water'] = get_tile(0, 0)
             
             self.tiles['dirt'] = {
                 'tl': get_tile(0, 1), 'tm': get_tile(1, 1), 'tr': get_tile(2, 1),
@@ -117,6 +119,11 @@ class GameMap:
             self.grid = data['grid']
             self.spawn_point = data.get('spawn_point', [100, 100])
             self.objects = [MapObject(o['x'], o['y'], o['type'], o.get('data', {}), o.get('collected', False)) for o in data.get('objects', [])]
+            
+            for obj in self.objects:
+                if obj.type == 'statue' and obj.data.get('tier') == 'Boss':
+                    self.god_theme = obj.data.get('god')
+                    
         except FileNotFoundError:
             if self.realm_x == 0 and self.realm_y == 0:
                 self._create_main_hub_map()
@@ -127,6 +134,7 @@ class GameMap:
             self.save_map()
             
     def ensure_safe_spawn(self, x, y):
+        if self.is_boss_realm: return
         player_rect = pygame.Rect(x - 32, y - 32, 128, 128)
         safe_objects = []
         for obj in self.objects:
@@ -171,19 +179,13 @@ class GameMap:
         self._populate_decorations()
         
     def _create_boss_map(self):
-        self.width, self.height = 32, 24
-        self.grid = [[TileType.STONE for _ in range(self.width)] for _ in range(self.height)]
+        self.width, self.height = 13, 10
+        self.grid = [[TileType.GRASS for _ in range(self.width)] for _ in range(self.height)]
         self.objects = []
+        self.god_theme = random.choice(self.gods)
         
-        for y in range(self.height):
-            for x in range(self.width):
-                if (x < 8 or x > self.width - 9) or (y < 6 or y > self.height - 7):
-                    if x not in (15, 16) and y not in (13, 14):
-                        self.grid[y][x] = TileType.WATER
-                
-        god = random.choice(self.gods)
-        self.objects.append(MapObject(15 * 64, 10 * 64, "statue", {"god": god, "tier": "Boss"}))
-        self.spawn_point = [15 * 64, 20 * 64]
+        self.objects.append(MapObject(400 - 32, 200, "statue", {"god": self.god_theme, "tier": "Boss"}))
+        self.spawn_point = [400 - 32, 350]
             
     def _generate_smart_realm(self):
         self.width, self.height = 32, 24
@@ -279,6 +281,8 @@ class GameMap:
         return None
 
     def check_collision_at(self, x, y, width, height):
+        if self.is_boss_realm: return False
+        
         check_rect = pygame.Rect(x, y, width, height)
         grid_x, grid_y = int(x // self.tile_size), int(y // self.tile_size)
         
@@ -293,6 +297,11 @@ class GameMap:
         return False
     
     def update_camera(self, player_x, player_y, screen_width, screen_height):
+        if self.is_boss_realm:
+            self.target_camera_offset = [0, 0]
+            self.camera_offset = [0, 0]
+            return
+            
         target_x = screen_width // 2 - player_x
         target_y = screen_height // 2 - player_y
         min_x = screen_width - (self.width * self.tile_size)
@@ -306,53 +315,48 @@ class GameMap:
         if not self.tiles: return 
         current_time = time.time()
         
-        for y in range(self.height):
-            for x in range(self.width):
-                screen_x = int(x * self.tile_size + self.camera_offset[0])
-                screen_y = int(y * self.tile_size + self.camera_offset[1])
-                
-                if (screen_x + self.tile_size < 0 or screen_x > surface.get_width() or screen_y + self.tile_size < 0 or screen_y > surface.get_height()): continue
-                
-                tile_type = self.grid[y][x]
-                if tile_type not in [TileType.GRASS, TileType.DIRT, TileType.GRASS_FLOWER, TileType.WATER, TileType.STONE]:
-                    tile_type = TileType.GRASS
-                
-                if tile_type == TileType.GRASS: surface.blit(self.tiles['grass'], (screen_x, screen_y))
-                elif tile_type == TileType.GRASS_FLOWER: surface.blit(self.tiles['grass_flower'], (screen_x, screen_y))
-                elif tile_type == TileType.STONE: surface.blit(self.tiles['stone'], (screen_x, screen_y))
-                elif tile_type == TileType.WATER:
-                    water_color = (150, 20, 20) if self.is_boss_realm else (41, 128, 185)
-                    line_color = (200, 50, 50) if self.is_boss_realm else (74, 163, 223)
-                    rect = pygame.Rect(screen_x, screen_y, self.tile_size, self.tile_size)
-                    pygame.draw.rect(surface, water_color, rect)
-                    wave_offset = math.sin(current_time * 2 + x) * 5
-                    pygame.draw.line(surface, line_color, (screen_x + 10, screen_y + 20 + wave_offset), (screen_x + 30, screen_y + 20 + wave_offset), 2)
-                    pygame.draw.line(surface, line_color, (screen_x + 30, screen_y + 40 - wave_offset), (screen_x + 50, screen_y + 40 - wave_offset), 2)
-                elif tile_type == TileType.DIRT:
-                    surface.blit(self.tiles['grass'], (screen_x, screen_y))
-                    n = (y > 0 and self.grid[y-1][x] == TileType.DIRT)
-                    s = (y < self.height-1 and self.grid[y+1][x] == TileType.DIRT)
-                    e = (x < self.width-1 and self.grid[y][x+1] == TileType.DIRT)
-                    w = (x > 0 and self.grid[y][x-1] == TileType.DIRT)
+        if not self.is_boss_realm:
+            for y in range(self.height):
+                for x in range(self.width):
+                    screen_x = int(x * self.tile_size + self.camera_offset[0])
+                    screen_y = int(y * self.tile_size + self.camera_offset[1])
+                    
+                    if (screen_x + self.tile_size < 0 or screen_x > surface.get_width() or screen_y + self.tile_size < 0 or screen_y > surface.get_height()): continue
+                    
+                    tile_type = self.grid[y][x]
+                    if tile_type not in [TileType.GRASS, TileType.DIRT, TileType.GRASS_FLOWER, TileType.WATER, TileType.STONE]:
+                        tile_type = TileType.GRASS
+                    
+                    if tile_type == TileType.GRASS: surface.blit(self.tiles['grass'], (screen_x, screen_y))
+                    elif tile_type == TileType.GRASS_FLOWER: surface.blit(self.tiles['grass_flower'], (screen_x, screen_y))
+                    elif tile_type == TileType.STONE: surface.blit(self.tiles['stone'], (screen_x, screen_y))
+                    elif tile_type == TileType.WATER:
+                        water_color = (41, 128, 185)
+                        line_color = (74, 163, 223)
+                        rect = pygame.Rect(screen_x, screen_y, self.tile_size, self.tile_size)
+                        pygame.draw.rect(surface, water_color, rect)
+                        wave_offset = math.sin(current_time * 2 + x) * 5
+                        pygame.draw.line(surface, line_color, (screen_x + 10, screen_y + 20 + wave_offset), (screen_x + 30, screen_y + 20 + wave_offset), 2)
+                        pygame.draw.line(surface, line_color, (screen_x + 30, screen_y + 40 - wave_offset), (screen_x + 50, screen_y + 40 - wave_offset), 2)
+                    elif tile_type == TileType.DIRT:
+                        surface.blit(self.tiles['grass'], (screen_x, screen_y))
+                        n = (y > 0 and self.grid[y-1][x] == TileType.DIRT)
+                        s = (y < self.height-1 and self.grid[y+1][x] == TileType.DIRT)
+                        e = (x < self.width-1 and self.grid[y][x+1] == TileType.DIRT)
+                        w = (x > 0 and self.grid[y][x-1] == TileType.DIRT)
 
-                    if s and e and not n and not w: tile = self.tiles['dirt']['tl']
-                    elif s and w and not n and not e: tile = self.tiles['dirt']['tr']
-                    elif n and e and not s and not w: tile = self.tiles['dirt']['bl']
-                    elif n and w and not s and not e: tile = self.tiles['dirt']['br']
-                    elif s and not n: tile = self.tiles['dirt']['tm']
-                    elif n and not s: tile = self.tiles['dirt']['bm']
-                    elif e and not w: tile = self.tiles['dirt']['ml']
-                    elif w and not e: tile = self.tiles['dirt']['mr']
-                    else: tile = self.tiles['dirt']['mm'] 
-                    surface.blit(tile, (screen_x, screen_y))
-
-        if self.is_boss_realm:
-            overlay = pygame.Surface((surface.get_width(), surface.get_height()), pygame.SRCALPHA)
-            overlay.fill((40, 0, 10, 80)) 
-            surface.blit(overlay, (0, 0))
+                        if s and e and not n and not w: tile = self.tiles['dirt']['tl']
+                        elif s and w and not n and not e: tile = self.tiles['dirt']['tr']
+                        elif n and e and not s and not w: tile = self.tiles['dirt']['bl']
+                        elif n and w and not s and not e: tile = self.tiles['dirt']['br']
+                        elif s and not n: tile = self.tiles['dirt']['tm']
+                        elif n and not s: tile = self.tiles['dirt']['bm']
+                        elif e and not w: tile = self.tiles['dirt']['ml']
+                        elif w and not e: tile = self.tiles['dirt']['mr']
+                        else: tile = self.tiles['dirt']['mm'] 
+                        surface.blit(tile, (screen_x, screen_y))
 
         sorted_objects = sorted(self.objects, key=lambda obj: obj.y)
-        
         for obj in sorted_objects:
             screen_x = int(obj.x + self.camera_offset[0])
             screen_y = int(obj.y + self.camera_offset[1])
@@ -371,8 +375,8 @@ class GameMap:
                     scale = 2 if is_boss else 1
                     
                     base_rect = pygame.Rect(screen_x + 16 - (16*(scale-1)), screen_y + 40 - (10*(scale-1)), 32 * scale, 16 * scale)
-                    pygame.draw.rect(surface, (120, 130, 140), base_rect, border_radius=4)
-                    pygame.draw.rect(surface, (80, 90, 100), base_rect, 2, border_radius=4)
+                    pygame.draw.rect(surface, (120, 130, 140), base_rect)
+                    pygame.draw.rect(surface, (80, 90, 100), base_rect, 2)
                     crystal_y = screen_y + 20 + bounce_y - (20*(scale-1))
                     
                     cx = screen_x + 32
@@ -386,8 +390,8 @@ class GameMap:
                 elif obj.type == "npc":
                     npc_y = screen_y + 16 + bounce_y
                     body_rect = pygame.Rect(screen_x + 16, npc_y + 12, 32, 28)
-                    pygame.draw.rect(surface, (155, 89, 182), body_rect, border_radius=8)
-                    pygame.draw.rect(surface, (100, 50, 120), body_rect, 2, border_radius=8)
+                    pygame.draw.rect(surface, (155, 89, 182), body_rect)
+                    pygame.draw.rect(surface, (100, 50, 120), body_rect, 2)
                     pygame.draw.circle(surface, (255, 224, 189), (screen_x + 32, int(npc_y)), 12)
                     pygame.draw.circle(surface, (200, 170, 140), (screen_x + 32, int(npc_y)), 12, 2)
                     pygame.draw.circle(surface, (0, 0, 0), (screen_x + 28, int(npc_y) - 2), 2)
