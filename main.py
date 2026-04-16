@@ -70,18 +70,23 @@ class PygameApp:
         self.name_font = pygame.font.Font(None, 32)
         self.btn_font = pygame.font.Font(None, 28)
         self.small_font = pygame.font.Font(None, 22)
+        self.tiny_font = pygame.font.Font(None, 18) 
         
         self.state = STATE_SELECTION
         self.gm = GameManager()
         self.dictionary = WordDictionary("normal")
         self.board = TileBoard()
         
-        self.gold = 0
-        self.potions = 1
-        self.scrolls = 1
+        self.gold = 50
         self.base_atk = 15
         self.player_max_hp = 100
         self.player = Player(hp=self.player_max_hp, base_attack=self.base_atk)
+        
+        self.show_inventory = False
+        self.inventory = [None] * 20
+        self.dragged_item = None
+        self.dragged_from_idx = -1
+        self.item_icons = {}
         
         self.realm_x = 0
         self.realm_y = 0
@@ -92,21 +97,17 @@ class PygameApp:
         self.total_statues = len(self.game_map.get_statues())
         
         self.floating_texts = []
-        self.p_anim_timer = 0
-        self.p_anim_x = 0
-        self.e_anim_timer = 0
-        self.e_anim_x = 0
+        self.p_anim_timer = 0; self.p_anim_x = 0
+        self.e_anim_timer = 0; self.e_anim_x = 0
         self.battle_float_timer = 0
         self.crit_timer = 0
-        
         self.shake_timer = 0
         self.shake_amount = 0
         
         self.target_word = self.dictionary.generate_random_word()
         self.current_guess = ""
         self.guess_history = []
-        self.absent_letters = set()
-        self.yellow_letters = set()
+        self.absent_letters = set(); self.yellow_letters = set()
         self.green_letters = [None] * 5
         
         self.showing_dialogue = False
@@ -117,6 +118,9 @@ class PygameApp:
         self.setup_assets()
         self.setup_selection()
         self.setup_overworld()
+        
+        self.add_item('compass', 'Compass', 'Teleport to Sanctuary', 1)
+        self.add_item('potion', 'Health Potion', 'Heals 50 HP', 2)
 
     def load_image_safely(self, path, size, fallback_color):
         if os.path.exists(path): return pygame.transform.scale(pygame.image.load(path).convert_alpha(), size)
@@ -129,6 +133,36 @@ class PygameApp:
         self.overworld_bg = pygame.transform.scale(self.load_image_safely(map_bg_path, (800, 600), (30, 80, 40)), (800, 600))
         self.battle_bg = pygame.transform.scale(self.load_image_safely(battle_bg_path, (800, 600), (80, 120, 200)), (800, 600))
         self.sprite_sheet = SpriteSheet(sprite_path)
+        
+        compass_img = pygame.Surface((32, 32), pygame.SRCALPHA)
+        pygame.draw.circle(compass_img, AMBER_500, (16, 16), 12)
+        pygame.draw.circle(compass_img, BLACK, (16, 16), 12, 2)
+        pygame.draw.polygon(compass_img, RED_500, [(16, 6), (12, 16), (20, 16)])
+        pygame.draw.polygon(compass_img, WHITE, [(16, 26), (12, 16), (20, 16)])
+        self.item_icons['compass'] = compass_img
+        
+        potion_img = pygame.Surface((32, 32), pygame.SRCALPHA)
+        pygame.draw.rect(potion_img, RED_500, (10, 14, 12, 14), border_radius=4)
+        pygame.draw.rect(potion_img, WHITE, (12, 6, 8, 8))
+        pygame.draw.rect(potion_img, BLACK, (10, 14, 12, 14), 2, border_radius=4)
+        pygame.draw.rect(potion_img, BLACK, (12, 6, 8, 8), 2)
+        self.item_icons['potion'] = potion_img
+        
+        scroll_img = pygame.Surface((32, 32), pygame.SRCALPHA)
+        pygame.draw.rect(scroll_img, (230, 210, 170), (8, 8, 16, 20), border_radius=2)
+        pygame.draw.rect(scroll_img, CYAN_500, (6, 12, 20, 5))
+        pygame.draw.rect(scroll_img, BLACK, (8, 8, 16, 20), 2, border_radius=2)
+        self.item_icons['scroll'] = scroll_img
+
+    def add_item(self, item_id, name, desc, qty=1):
+        for slot in self.inventory:
+            if slot and slot['id'] == item_id and slot.get('qty', 1) > 0:
+                slot['qty'] += qty; return True
+        for i in range(len(self.inventory)):
+            if self.inventory[i] is None:
+                self.inventory[i] = {'id': item_id, 'name': name, 'desc': desc, 'qty': qty}
+                return True
+        return False
 
     def generate_box(self, c1, r1, c2, r2): return [(c, r) for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)]
 
@@ -200,14 +234,16 @@ class PygameApp:
         elif exit_side == 'left': self.map_player_pos = [map_pixel_width - 128, clamped_y]
         elif exit_side == 'bottom': self.map_player_pos = [clamped_x, 64]
         elif exit_side == 'top': self.map_player_pos = [clamped_x, map_pixel_height - 128]
+        elif exit_side == 'teleport': self.map_player_pos = [14 * 64, 15 * 64] 
             
         self.game_map.ensure_safe_spawn(self.map_player_pos[0], self.map_player_pos[1])
         self.facing_left_overworld = False
         self.game_map.camera_offset = [0, 0]
         self.game_map.target_camera_offset = [0, 0]
 
-    def spawn_floating_text(self, text, x, y, color):
-        self.floating_texts.append({'text': text, 'x': x, 'y': y, 'timer': 45, 'color': color})
+    # 🟢 เพิ่มการตั้งค่า font_type สำหรับข้อความแจ้งเตือนไอเทม
+    def spawn_floating_text(self, text, x, y, color, font_type='large'):
+        self.floating_texts.append({'text': text, 'x': x, 'y': y, 'timer': 45, 'color': color, 'font_type': font_type})
 
     def randomize_enemy(self):
         god = self.current_statue.data.get('god', 'Unknown')
@@ -246,11 +282,91 @@ class PygameApp:
         self.absent_letters, self.yellow_letters = set(), set()
         self.green_letters = [None] * 5
 
+    def use_item(self, hotbar_idx):
+        item = self.inventory[hotbar_idx]
+        if not item: return
+        
+        # 🟢 คำนวณให้ข้อความไปโผล่ตรงกลางช่อง Hotbar ที่เรากดใช้เป๊ะๆ
+        slot_size = 40
+        padding = 6
+        start_x = (800 - (5 * slot_size + 4 * padding)) // 2
+        px = start_x + hotbar_idx * (slot_size + padding) + (slot_size // 2)
+        py = 520 # เหนือ Hotbar ขึ้นมาเล็กน้อย
+        
+        if item['id'] == 'compass':
+            if self.state == STATE_OVERWORLD:
+                if self.realm_x == 0 and self.realm_y == 0:
+                    self.spawn_floating_text("Already at Sanctuary", px - 75, py, WHITE, 'small')
+                else:
+                    self.change_realm(0, 0, 'teleport')
+                    self.spawn_floating_text("Returned to Sanctuary", px - 85, py, WHITE, 'small')
+            else:
+                self.spawn_floating_text("Can't use now", px - 50, py, RED_500, 'small')
+                
+        elif item['id'] == 'potion':
+            if self.player.hp < self.player_max_hp:
+                heal_amount = 50
+                self.player.hp = min(self.player_max_hp, self.player.hp + heal_amount)
+                self.spawn_floating_text(f"+{heal_amount} HP", px - 25, py, EMERALD_400, 'small')
+                item['qty'] -= 1
+                if item['qty'] <= 0: self.inventory[hotbar_idx] = None
+            else:
+                self.spawn_floating_text("HP is Full", px - 40, py, WHITE, 'small')
+                
+        elif item['id'] == 'scroll':
+            if self.state == STATE_BATTLE and not self.gm.game_over:
+                for idx, c in enumerate(self.target_word):
+                    if self.green_letters[idx] is None:
+                        self.green_letters[idx] = c
+                        self.spawn_floating_text("Hint Used!", px - 40, py, CYAN_400, 'small')
+                        item['qty'] -= 1
+                        if item['qty'] <= 0: self.inventory[hotbar_idx] = None
+                        break
+            else:
+                self.spawn_floating_text("Can't use now", px - 50, py, RED_500, 'small')
+
+    def get_hovered_slot(self, pos):
+        mx, my = pos
+        slot_size = 40
+        padding = 6
+        start_x = (800 - (5 * slot_size + 4 * padding)) // 2
+        hotbar_start_y = 540
+        
+        for i in range(5):
+            if pygame.Rect(start_x + i * (slot_size + padding), hotbar_start_y, slot_size, slot_size).collidepoint(mx, my): return i
+            
+        if self.show_inventory:
+            inv_start_y = hotbar_start_y - (3 * (slot_size + padding)) - 10
+            for i in range(15):
+                r, c = i // 5, i % 5
+                idx = i + 5
+                if pygame.Rect(start_x + c * (slot_size + padding), inv_start_y + r * (slot_size + padding), slot_size, slot_size).collidepoint(mx, my): return idx
+        return None
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT: 
                 if hasattr(self, 'game_map'): self.game_map.save_map()
                 self.gm.export_data_to_csv(); pygame.quit(); sys.exit()
+                
+            if self.state in [STATE_OVERWORLD, STATE_BATTLE]:
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    slot_idx = self.get_hovered_slot(event.pos)
+                    if slot_idx is not None and self.inventory[slot_idx]:
+                        self.dragged_item = self.inventory[slot_idx]
+                        self.dragged_from_idx = slot_idx
+                        self.inventory[slot_idx] = None
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    if self.dragged_item:
+                        slot_idx = self.get_hovered_slot(event.pos)
+                        if slot_idx is not None:
+                            temp = self.inventory[slot_idx]
+                            self.inventory[slot_idx] = self.dragged_item
+                            if temp: self.inventory[self.dragged_from_idx] = temp
+                        else:
+                            self.inventory[self.dragged_from_idx] = self.dragged_item
+                        self.dragged_item = None
+                        self.dragged_from_idx = -1
             
             if self.state == STATE_SELECTION:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -280,26 +396,28 @@ class PygameApp:
                             self.state = STATE_BATTLE
                             self.randomize_enemy()
                             self.gm.start_word_timer()
-                    elif event.key == pygame.K_e:
+                    elif event.key == pygame.K_f:
                         player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
                         nearby_npc = self.game_map.get_nearby_npc(player_rect)
                         if nearby_npc:
                             self.showing_dialogue = True
                             self.current_npc = nearby_npc
                             self.dialogue_timer = 180  
+                    elif event.key == pygame.K_e:
+                        self.show_inventory = not self.show_inventory
+                    elif pygame.K_1 <= event.key <= pygame.K_5:
+                        self.use_item(event.key - pygame.K_1)
                             
             elif self.state == STATE_SHOP:
                 if event.type == pygame.KEYDOWN:
                     if event.key in (pygame.K_ESCAPE, pygame.K_SPACE):
                         self.state = STATE_OVERWORLD
                     elif event.key == pygame.K_1:
-                        if self.gold >= 50:
+                        if self.gold >= 50 and self.add_item('potion', 'Health Potion', 'Heals 50 HP', 1):
                             self.gold -= 50
-                            self.potions += 1
                     elif event.key == pygame.K_2:
-                        if self.gold >= 50:
+                        if self.gold >= 50 and self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 1):
                             self.gold -= 50
-                            self.scrolls += 1
             
             elif self.state == STATE_UPGRADE:
                 if event.type == pygame.KEYDOWN:
@@ -329,16 +447,10 @@ class PygameApp:
                     else:
                         if event.key == pygame.K_ESCAPE:
                             self.state = STATE_OVERWORLD
-                        elif event.key == pygame.K_1 and self.potions > 0 and self.player.hp < self.player_max_hp:
-                            self.potions -= 1
-                            self.player.hp = min(self.player_max_hp, self.player.hp + 50)
-                            self.spawn_floating_text("+50 HP", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, EMERALD_400)
-                        elif event.key == pygame.K_2 and self.scrolls > 0:
-                            self.scrolls -= 1
-                            for idx, c in enumerate(self.target_word):
-                                if self.green_letters[idx] is None:
-                                    self.green_letters[idx] = c
-                                    break
+                        elif event.key == pygame.K_e:
+                            self.show_inventory = not self.show_inventory
+                        elif pygame.K_1 <= event.key <= pygame.K_5:
+                            self.use_item(event.key - pygame.K_1)
                         elif event.unicode.isascii() and event.unicode.isalpha() and len(self.current_guess) < 5:
                             self.current_guess += event.unicode.upper(); self.gm.keystroke_count += 1
                         elif event.key == pygame.K_BACKSPACE: self.current_guess = self.current_guess[:-1]; self.gm.keystroke_count += 1
@@ -510,10 +622,14 @@ class PygameApp:
         elif self.map_player_pos[1] < edge_threshold:
             target_ry -= 1; will_change = True; exit_side = 'top'
 
-        # 🟢 แก้ไขบักการกระโดดข้ามแผนที่ ส่งพิกัด target ตรงๆ ไปเลย!
         if will_change:
-            self.change_realm(target_rx, target_ry, exit_side)
-            return
+            target_file = os.path.join(BASE_DIR, f"data/maps/realm_{target_rx}_{target_ry}.json")
+            if os.path.exists(target_file):
+                self.change_realm(target_rx, target_ry, exit_side)
+                return
+            else:
+                self.map_player_pos[0] = old_x
+                self.map_player_pos[1] = old_y
         
         self.game_map.update_camera(self.map_player_pos[0] + 32, self.map_player_pos[1] + 32, 
                                     self.screen_width, self.screen_height)
@@ -525,6 +641,53 @@ class PygameApp:
             if self.dialogue_timer <= 0:
                 self.showing_dialogue = False
                 self.current_npc = None
+
+    def draw_inventory_ui(self, surface):
+        slot_size = 40
+        padding = 6
+        start_x = (800 - (5 * slot_size + 4 * padding)) // 2
+        hotbar_start_y = 540
+        
+        slot_bg = (15, 23, 42, 160) 
+        border_color = (123, 165, 172, 100) 
+        
+        if self.show_inventory:
+            inv_start_y = hotbar_start_y - (3 * (slot_size + padding)) - 10
+            for i in range(15):
+                r, c = i // 5, i % 5
+                idx = i + 5
+                rect = pygame.Rect(start_x + c * (slot_size + padding), inv_start_y + r * (slot_size + padding), slot_size, slot_size)
+                
+                s = pygame.Surface((slot_size, slot_size), pygame.SRCALPHA)
+                pygame.draw.rect(s, slot_bg, s.get_rect(), border_radius=6)
+                pygame.draw.rect(s, border_color, s.get_rect(), 1, border_radius=6)
+                surface.blit(s, (rect.x, rect.y))
+                
+                item = self.inventory[idx]
+                if item:
+                    surface.blit(self.item_icons[item['id']], (rect.x+4, rect.y+4))
+                    if item.get('qty', 1) > 1:
+                        surface.blit(self.tiny_font.render(str(item['qty']), True, WHITE), (rect.right-10, rect.bottom-12))
+
+        for i in range(5):
+            rect = pygame.Rect(start_x + i * (slot_size + padding), hotbar_start_y, slot_size, slot_size)
+            
+            s = pygame.Surface((slot_size, slot_size), pygame.SRCALPHA)
+            pygame.draw.rect(s, slot_bg, s.get_rect(), border_radius=6)
+            pygame.draw.rect(s, border_color, s.get_rect(), 1, border_radius=6)
+            surface.blit(s, (rect.x, rect.y))
+            
+            surface.blit(self.tiny_font.render(str(i+1), True, SLATE_400), (rect.x+4, rect.y+2))
+            
+            item = self.inventory[i]
+            if item:
+                surface.blit(self.item_icons[item['id']], (rect.x+4, rect.y+4))
+                if item.get('qty', 1) > 1:
+                    surface.blit(self.tiny_font.render(str(item['qty']), True, WHITE), (rect.right-10, rect.bottom-12))
+
+        if self.dragged_item:
+            mx, my = pygame.mouse.get_pos()
+            surface.blit(self.item_icons[self.dragged_item['id']], (mx - 16, my - 16))
 
     def draw_overworld(self):
         self.game_map.draw(self.screen)
@@ -554,7 +717,7 @@ class PygameApp:
             prompt_box.fill(BLACK)
             prompt_box.set_alpha(180)
             self.screen.blit(prompt_box, (player_screen_x - 70, player_screen_y - 50))
-            self.screen.blit(self.small_font.render("Press E to Talk", True, CYAN_400), 
+            self.screen.blit(self.small_font.render("Press F to Talk", True, CYAN_400),  
                            (player_screen_x - 60, player_screen_y - 40))
         
         if self.showing_dialogue and self.current_npc:
@@ -563,7 +726,7 @@ class PygameApp:
             dialogue_box.set_alpha(230)
             
             box_x = (self.screen_width - 600) // 2
-            box_y = self.screen_height - 150
+            box_y = self.screen_height - 280 
             
             self.screen.blit(dialogue_box, (box_x, box_y))
             pygame.draw.rect(self.screen, CYAN_400, (box_x, box_y, 600, 120), 3, border_radius=8)
@@ -618,6 +781,21 @@ class PygameApp:
         pygame.draw.circle(self.screen, EMERALD_500, (gold_x + 20, gold_y + 20), 6)
         self.screen.blit(gold_text, (gold_x + 36, gold_y + (40 - gold_text.get_height()) // 2))
 
+        self.draw_inventory_ui(self.screen)
+        
+        # 🟢 เรนเดอร์ข้อความลอยแบบมีชาโดว์ ให้อ่านง่ายทะลุทุกสีพื้น
+        for t in self.floating_texts[:]:
+            f = self.small_font if t.get('font_type') == 'small' else self.combo_font
+            txt_str = str(t['text'])
+            
+            shadow = f.render(txt_str, True, BLACK)
+            self.screen.blit(shadow, (t['x'] + 1, t['y'] + 1))
+            self.screen.blit(f.render(txt_str, True, t['color']), (t['x'], t['y']))
+            
+            t['y'] -= 1.5 if t.get('font_type') == 'small' else 2
+            t['timer'] -= 1
+            if t['timer'] <= 0: self.floating_texts.remove(t)
+
     def draw_shop(self):
         self.draw_overworld()
         overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
@@ -631,11 +809,14 @@ class PygameApp:
         self.screen.blit(self.font.render("MERCHANT'S SHOP", True, AMBER_500), (220, 170))
         self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (220, 220))
         
+        potions_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'potion'])
+        scrolls_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'scroll'])
+        
         self.screen.blit(self.name_font.render("[1] Health Potion (50G)", True, EMERALD_400), (220, 280))
-        self.screen.blit(self.small_font.render(f"Owned: {self.potions}", True, SLATE_400), (240, 310))
+        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, SLATE_400), (240, 310))
         
         self.screen.blit(self.name_font.render("[2] Hint Scroll (50G)", True, CYAN_400), (220, 360))
-        self.screen.blit(self.small_font.render(f"Owned: {self.scrolls}", True, SLATE_400), (240, 390))
+        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, SLATE_400), (240, 390))
         
         self.screen.blit(self.small_font.render("Press SPACE or ESC to leave", True, GRAY), (220, 430))
 
@@ -711,8 +892,13 @@ class PygameApp:
             battle_surf.blit(combo_txt, (460, 295))
         
         for t in self.floating_texts[:]:
-            battle_surf.blit(self.combo_font.render(str(t['text']), True, t['color']), (t['x'], t['y']))
-            t['y'] -= 2; t['timer'] -= 1
+            f = self.small_font if t.get('font_type') == 'small' else self.combo_font
+            txt_str = str(t['text'])
+            shadow = f.render(txt_str, True, BLACK)
+            battle_surf.blit(shadow, (t['x'] + 1, t['y'] + 1))
+            battle_surf.blit(f.render(txt_str, True, t['color']), (t['x'], t['y']))
+            t['y'] -= 1.5 if t.get('font_type') == 'small' else 2
+            t['timer'] -= 1
             if t['timer'] <= 0: self.floating_texts.remove(t)
             
         if self.crit_timer > 0:
@@ -728,7 +914,7 @@ class PygameApp:
         pygame.draw.line(battle_surf, SLATE_700, (0, board_start_y), (800, board_start_y), 2)
 
         if not self.gm.game_over:
-            battle_surf.blit(self.small_font.render(f"[1] Potion: {self.potions}   [2] Hint Scroll: {self.scrolls}   [ESC] Flee", True, SLATE_400), (20, board_start_y - 25))
+            battle_surf.blit(self.small_font.render(f"Press 1-5 to use Hotbar Items | [ESC] Flee", True, SLATE_400), (20, board_start_y - 25))
 
         if self.board.current_attempt >= 4 and not self.gm.game_over:
             hint = f"Ehm.. maybe it's: '{self.dictionary.get_current_hint()}'"
@@ -776,14 +962,18 @@ class PygameApp:
         if self.gm.game_over:
             msg = "VICTORY!" if self.enemy.current_hp <= 0 else "DEFEATED!"
             msg_color = EMERALD_400 if msg == "VICTORY!" else RED_500
+            
             txt_surface = self.large_font.render(msg, True, msg_color)
             txt_rect = txt_surface.get_rect(center=(self.screen_width // 2, 280))
             battle_surf.blit(txt_surface, txt_rect)
+            
             sub_txt = self.small_font.render("Press SPACE to return", True, WHITE)
             sub_rect = sub_txt.get_rect(center=(self.screen_width // 2, 330))
             battle_surf.blit(sub_txt, sub_rect)
 
         self.screen.blit(battle_surf, (shake_x, shake_y))
+        
+        self.draw_inventory_ui(self.screen)
 
     def run(self):
         clock = pygame.time.Clock()
