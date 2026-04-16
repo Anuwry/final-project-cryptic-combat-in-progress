@@ -35,14 +35,19 @@ class MapObject:
         return self.rect
 
 class GameMap:
-    def __init__(self, realm_x=0, realm_y=0):
+    def __init__(self, realm_x=0, realm_y=0, force_normal=False):
         self.realm_x = realm_x
         self.realm_y = realm_y
         self.level = abs(realm_x) + abs(realm_y) + 1
-        self.is_boss_realm = (self.level > 1 and self.level % 5 == 0)
+        
+        if force_normal:
+            self.is_boss_realm = False
+        else:
+            self.is_boss_realm = (self.level > 1 and self.level % 5 == 0)
+            
         self.map_file = os.path.join(BASE_DIR, f"data/maps/realm_{realm_x}_{realm_y}.json")
         self.tile_size = 64
-        self.width = 32
+        self.width = 32  
         self.height = 24
         self.grid = []
         self.objects = []
@@ -140,7 +145,6 @@ class GameMap:
         
         for y in range(10, 18):
             for x in range(12, 20): self.grid[y][x] = TileType.DIRT
-                
         for y in range(self.height):
             self.grid[y][15] = TileType.DIRT; self.grid[y][16] = TileType.DIRT
         for x in range(self.width):
@@ -204,7 +208,7 @@ class GameMap:
             if is_horizontal_river:
                 ry = random.choice([5, 6, 18, 19])
                 for x in range(self.width):
-                    if self.grid[ry][x] == TileType.DIRT: pass
+                    if self.grid[ry][x] == TileType.DIRT: pass 
                     else:
                         self.grid[ry][x] = TileType.WATER
                         self.grid[ry+1][x] = TileType.WATER
