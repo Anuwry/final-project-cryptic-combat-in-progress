@@ -92,6 +92,14 @@ class PygameApp:
         self.realm_y = 0
         self.current_level = 1
         
+        self.current_reward_atk = 5
+        self.current_reward_hp = 20
+        
+        self.nearby_interactables = []
+        self.interact_index = 0
+        
+        self.enemy_hit_count = 0 
+        
         self.generated_boss_levels = set()
         maps_dir = os.path.join(BASE_DIR, "data/maps")
         if os.path.exists(maps_dir):
@@ -257,13 +265,10 @@ class PygameApp:
         map_pixel_width = self.game_map.width * 64
         map_pixel_height = self.game_map.height * 64
         
-        clamped_x = max(64, min(self.map_player_pos[0], map_pixel_width - 128))
-        clamped_y = max(64, min(self.map_player_pos[1], map_pixel_height - 128))
-        
-        if exit_side == 'right': self.map_player_pos = [64, clamped_y]
-        elif exit_side == 'left': self.map_player_pos = [map_pixel_width - 128, clamped_y]
-        elif exit_side == 'bottom': self.map_player_pos = [clamped_x, 64]
-        elif exit_side == 'top': self.map_player_pos = [clamped_x, map_pixel_height - 128]
+        if exit_side == 'right': self.map_player_pos = [64, 13 * 64]
+        elif exit_side == 'left': self.map_player_pos = [map_pixel_width - 128, 13 * 64]
+        elif exit_side == 'bottom': self.map_player_pos = [15 * 64, 64]
+        elif exit_side == 'top': self.map_player_pos = [15 * 64, map_pixel_height - 128]
         elif exit_side == 'teleport': self.map_player_pos = [14 * 64, 15 * 64] 
             
         self.game_map.ensure_safe_spawn(self.map_player_pos[0], self.map_player_pos[1])
@@ -300,6 +305,7 @@ class PygameApp:
             self.enemy_reward = 20
             
         self.enemy = Enemy(name=name, max_hp=max_hp, attack_power=atk)
+        self.enemy_hit_count = 0
         
         enemy_layers = [
             random.choice(self.options['base']), 
@@ -377,13 +383,23 @@ class PygameApp:
                 if pygame.Rect(start_x + c * (slot_size + padding), inv_start_y + r * (slot_size + padding), slot_size, slot_size).collidepoint(mx, my): return idx
         return None
 
+    def get_nearby_interactables(self, p_rect, dist=50):
+        interactables = []
+        check_rect = p_rect.inflate(dist, dist)
+        for o in self.game_map.objects:
+            if o.type == "statue" and not o.collected and check_rect.colliderect(o.rect):
+                interactables.append(o)
+            elif o.type in ("npc", "shop_npc") and check_rect.colliderect(o.rect):
+                interactables.append(o)
+        return interactables
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT: 
                 if hasattr(self, 'game_map'): self.game_map.save_map()
                 self.gm.export_data_to_csv(); pygame.quit(); sys.exit()
                 
-            if self.state == STATE_OVERWORLD: 
+            if self.state in [STATE_OVERWORLD]: 
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     slot_idx = self.get_hovered_slot(event.pos)
                     if slot_idx is not None and self.inventory[slot_idx]:
@@ -392,7 +408,7 @@ class PygameApp:
                         self.inventory[slot_idx] = None
                     elif self.showing_dialogue:
                         mx, my = event.pos
-                        dialogue_rect = pygame.Rect(100, self.screen_height - 150, 600, 120)
+                        dialogue_rect = pygame.Rect(100, 400, 600, 120)
                         if dialogue_rect.collidepoint(mx, my):
                             self.showing_dialogue = False
                             if self.current_npc and self.current_npc.data.get('name') == 'Merchant':
@@ -427,11 +443,11 @@ class PygameApp:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mx, my = event.pos
                     if hasattr(self, 'upg_ares_rect') and self.upg_ares_rect.collidepoint(mx, my):
-                        self.base_atk += 5
+                        self.base_atk += getattr(self, 'current_reward_atk', 5)
                         self.player.base_attack = self.base_atk
                         self.state = STATE_OVERWORLD
                     elif hasattr(self, 'upg_demeter_rect') and self.upg_demeter_rect.collidepoint(mx, my):
-                        self.player_max_hp += 20
+                        self.player_max_hp += getattr(self, 'current_reward_hp', 20)
                         self.player.hp = self.player_max_hp
                         self.state = STATE_OVERWORLD
             
@@ -460,21 +476,26 @@ class PygameApp:
                             self.showing_dialogue = False
                             self.current_npc = None
                     else:
-                        if event.key in (pygame.K_SPACE, pygame.K_RETURN):
-                            player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
-                            nearby_statue = self.game_map.get_nearby_statue(player_rect)
-                            if nearby_statue:
-                                self.current_statue = nearby_statue
-                                self.state = STATE_BATTLE
-                                self.randomize_enemy()
-                                self.gm.start_word_timer()
-                        elif event.key == pygame.K_f:
-                            player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
-                            nearby_npc = self.game_map.get_nearby_npc(player_rect)
-                            if nearby_npc:
-                                self.showing_dialogue = True
-                                self.current_npc = nearby_npc
-                                self.dialogue_timer = 180  
+                        menu_active = hasattr(self, 'nearby_interactables') and len(self.nearby_interactables) > 1
+                        
+                        if menu_active and event.key == pygame.K_UP:
+                            self.interact_index = (self.interact_index - 1) % len(self.nearby_interactables)
+                        elif menu_active and event.key == pygame.K_DOWN:
+                            self.interact_index = (self.interact_index + 1) % len(self.nearby_interactables)
+                        
+                        elif event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_f):
+                            if hasattr(self, 'nearby_interactables') and self.nearby_interactables:
+                                o = self.nearby_interactables[self.interact_index]
+                                if o.type == "statue":
+                                    self.current_statue = o
+                                    self.state = STATE_BATTLE
+                                    self.randomize_enemy()
+                                    self.gm.start_word_timer()
+                                elif o.type in ("npc", "shop_npc"):
+                                    self.showing_dialogue = True
+                                    self.current_npc = o
+                                    self.dialogue_timer = 180  
+                                    
                         elif event.key == pygame.K_e:
                             self.show_inventory = not self.show_inventory
                         elif pygame.K_1 <= event.key <= pygame.K_5:
@@ -494,11 +515,11 @@ class PygameApp:
             elif self.state == STATE_UPGRADE:
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_1:
-                        self.base_atk += 5
+                        self.base_atk += getattr(self, 'current_reward_atk', 5)
                         self.player.base_attack = self.base_atk
                         self.state = STATE_OVERWORLD
                     elif event.key == pygame.K_2:
-                        self.player_max_hp += 20
+                        self.player_max_hp += getattr(self, 'current_reward_hp', 20)
                         self.player.hp = self.player_max_hp
                         self.state = STATE_OVERWORLD
                             
@@ -512,6 +533,21 @@ class PygameApp:
                                 self.statues_collected += 1
                                 self.gold += self.enemy_reward
                                 self.game_map.save_map()
+                                
+                                tier = self.current_statue.data.get('tier', 'Follower')
+                                if tier == 'Boss':
+                                    self.current_reward_atk = random.randint(8, 15)
+                                    self.current_reward_hp = random.randint(40, 60)
+                                elif tier == 'Apostle':
+                                    self.current_reward_atk = random.randint(4, 8)
+                                    self.current_reward_hp = random.randint(20, 35)
+                                elif tier == 'Zealot':
+                                    self.current_reward_atk = random.randint(2, 5)
+                                    self.current_reward_hp = random.randint(10, 20)
+                                else:
+                                    self.current_reward_atk = random.randint(1, 3)
+                                    self.current_reward_hp = random.randint(5, 10)
+                                    
                                 self.state = STATE_UPGRADE 
                             else:
                                 self.player.hp = self.player_max_hp
@@ -589,13 +625,25 @@ class PygameApp:
         else:
             if self.board.current_attempt > self.board.grid_size:
                 self.player.combo_count = 0
-                self.enemy.attack_player(self.player)
+                
+                self.enemy_hit_count += 1
+                is_crit = (self.enemy_hit_count % 3 == 0)
+                
+                base_damage = self.enemy.attack_power
+                final_damage = base_damage * 2 if is_crit else base_damage
+                
+                self.player.hp -= final_damage
+                if self.player.hp < 0: self.player.hp = 0
+                
                 self.e_anim_timer = 20
-                self.trigger_shake(15, 20) 
+                self.trigger_shake(20 if is_crit else 15, 20) 
                 
                 px = self.player_battle_pos[0] + 80 + random.randint(-20, 20)
                 py = self.player_battle_pos[1] - 20 + random.randint(-15, 15)
-                self.spawn_floating_text(f"-{self.enemy.attack_power}", px, py, RED_500)
+                
+                if is_crit:
+                    self.spawn_floating_text("CRITICAL HIT!", px, py - 20, RED_500, 'small')
+                self.spawn_floating_text(f"-{final_damage}", px, py, RED_500)
                 
                 if self.player.hp <= 0: self.gm.game_over = True
                 else: self.reset_for_next_word()
@@ -660,7 +708,7 @@ class PygameApp:
         self.active_buttons = []
         
         self.screen.blit(self.large_font.render("ARMORY", True, CYAN_400), (50, 40))
-        self.screen.blit(self.small_font.render("CHOOSE YOUR LOOK (CANNOT BE CHANGED)", True, SLATE_400), (55, 90))
+        self.screen.blit(self.small_font.render("CHOOSE YOUR LOOK", True, SLATE_400), (55, 90))
         
         px, py = 175, 400
         pygame.draw.ellipse(self.screen, SLATE_800, (px - 80, py, 160, 30))
@@ -695,18 +743,24 @@ class PygameApp:
         
         old_x, old_y = self.map_player_pos[0], self.map_player_pos[1]
         
+        menu_active = hasattr(self, 'nearby_interactables') and len(self.nearby_interactables) > 1 and not self.showing_dialogue
+        
         if keys[pygame.K_LEFT] or keys[pygame.K_a]: 
-            self.map_player_pos[0] -= self.map_player_speed
-            self.facing_left_overworld, self.is_moving = True, True
+            if keys[pygame.K_a] or not menu_active:
+                self.map_player_pos[0] -= self.map_player_speed
+                self.facing_left_overworld, self.is_moving = True, True
         if keys[pygame.K_RIGHT] or keys[pygame.K_d]: 
-            self.map_player_pos[0] += self.map_player_speed
-            self.facing_left_overworld, self.is_moving = False, True
+            if keys[pygame.K_d] or not menu_active:
+                self.map_player_pos[0] += self.map_player_speed
+                self.facing_left_overworld, self.is_moving = False, True
         if keys[pygame.K_UP] or keys[pygame.K_w]: 
-            self.map_player_pos[1] -= self.map_player_speed
-            self.is_moving = True
+            if keys[pygame.K_w] or not menu_active:
+                self.map_player_pos[1] -= self.map_player_speed
+                self.is_moving = True
         if keys[pygame.K_DOWN] or keys[pygame.K_s]: 
-            self.map_player_pos[1] += self.map_player_speed
-            self.is_moving = True
+            if keys[pygame.K_s] or not menu_active:
+                self.map_player_pos[1] += self.map_player_speed
+                self.is_moving = True
         
         if self.game_map.check_collision_at(self.map_player_pos[0], self.map_player_pos[1], 64, 64):
             self.map_player_pos[0] = old_x
@@ -738,6 +792,12 @@ class PygameApp:
                                     self.screen_width, self.screen_height)
         
         self.move_timer_overworld = self.move_timer_overworld + 0.2 if self.is_moving else 0
+        
+        player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
+        current_in_range = self.get_nearby_interactables(player_rect)
+        if not hasattr(self, 'nearby_interactables') or set(current_in_range) != set(self.nearby_interactables):
+            self.nearby_interactables = current_in_range
+            self.interact_index = 0
 
     def draw_inventory_ui(self, surface):
         slot_size = 40
@@ -750,6 +810,24 @@ class PygameApp:
         
         if self.show_inventory:
             inv_start_y = hotbar_start_y - (3 * (slot_size + padding)) - 10
+            
+            panel_w = 5 * slot_size + 4 * padding
+            panel_h = 60
+            stats_y = inv_start_y - panel_h - 10
+            
+            stats_s = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+            pygame.draw.rect(stats_s, slot_bg, stats_s.get_rect())
+            pygame.draw.rect(stats_s, border_color, stats_s.get_rect(), 1)
+            surface.blit(stats_s, (start_x, stats_y))
+            
+            title_surf = self.small_font.render("PLAYER STATS", True, AMBER_400)
+            hp_surf = self.tiny_font.render(f"HP: {self.player.hp} / {self.player_max_hp}", True, EMERALD_400)
+            atk_surf = self.tiny_font.render(f"ATK: {self.base_atk}", True, RED_500)
+            
+            surface.blit(title_surf, (start_x + 15, stats_y + 10))
+            surface.blit(hp_surf, (start_x + 15, stats_y + 35))
+            surface.blit(atk_surf, (start_x + 130, stats_y + 35))
+            
             for i in range(15):
                 r, c = i // 5, i % 5
                 idx = i + 5
@@ -798,28 +876,34 @@ class PygameApp:
         player_screen_y = self.map_player_pos[1] + self.game_map.camera_offset[1]
         self.screen.blit(img, (player_screen_x, player_screen_y - by))
         
-        player_rect = pygame.Rect(self.map_player_pos[0], self.map_player_pos[1], 64, 64)
-        nearby_statue = self.game_map.get_nearby_statue(player_rect)
-        
-        if nearby_statue:
-            prompt_box = pygame.Surface((220, 36), pygame.SRCALPHA)
+        if hasattr(self, 'nearby_interactables') and self.nearby_interactables and not self.showing_dialogue:
+            if self.interact_index >= len(self.nearby_interactables):
+                self.interact_index = 0
+                
+            box_w = 260
+            box_h = 20 + (30 * len(self.nearby_interactables))
+            prompt_box = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
             pygame.draw.rect(prompt_box, (15, 23, 42, 180), prompt_box.get_rect()) 
             pygame.draw.rect(prompt_box, (123, 165, 172, 100), prompt_box.get_rect(), 1) 
-            self.screen.blit(prompt_box, (player_screen_x - 70, player_screen_y - 45))
-            self.screen.blit(self.small_font.render("Press SPACE to Battle", True, WHITE), (player_screen_x - 55, player_screen_y - 37))
-        
-        nearby_npc = self.game_map.get_nearby_npc(player_rect)
-        if nearby_npc and not self.showing_dialogue:
-            prompt_box = pygame.Surface((180, 36), pygame.SRCALPHA)
-            pygame.draw.rect(prompt_box, (15, 23, 42, 180), prompt_box.get_rect()) 
-            pygame.draw.rect(prompt_box, (123, 165, 172, 100), prompt_box.get_rect(), 1) 
-            self.screen.blit(prompt_box, (player_screen_x - 50, player_screen_y - 45))
-            self.screen.blit(self.small_font.render("Press F to Talk", True, CYAN_400), (player_screen_x - 30, player_screen_y - 37))
+            
+            px = player_screen_x - box_w//2 + 32
+            py = player_screen_y - box_h - 10
+            self.screen.blit(prompt_box, (px, py))
+            
+            for i, o in enumerate(self.nearby_interactables):
+                is_sel = (i == self.interact_index)
+                color = WHITE if is_sel else SLATE_400
+                
+                if o.type == "statue":
+                    text = f"> [SPACE] Battle: {o.data.get('god', 'Statue')}" if is_sel else f"  Battle: {o.data.get('god', 'Statue')}"
+                else:
+                    text = f"> [SPACE] Talk: {o.data.get('name', 'NPC')}" if is_sel else f"  Talk: {o.data.get('name', 'NPC')}"
+                    
+                txt_surf = self.small_font.render(text, True, color)
+                self.screen.blit(txt_surf, (px + 15, py + 10 + (i * 30)))
         
         if self.showing_dialogue and self.current_npc:
-            dialogue_box = pygame.Rect(100, self.screen_height - 150, 600, 120)
-            mx, my = pygame.mouse.get_pos()
-            hovering_dialogue = dialogue_box.collidepoint(mx, my)
+            dialogue_box = pygame.Rect(100, 400, 600, 120)
             
             s = pygame.Surface((dialogue_box.width, dialogue_box.height), pygame.SRCALPHA)
             pygame.draw.rect(s, (15, 23, 42, 180), s.get_rect()) 
@@ -832,11 +916,10 @@ class PygameApp:
             self.screen.blit(self.name_font.render(npc_name, True, AMBER_400), (dialogue_box.x + 20, dialogue_box.y + 15))
             self.screen.blit(self.small_font.render(npc_text, True, WHITE), (dialogue_box.x + 20, dialogue_box.y + 50))
             
-            if npc_name == 'Merchant': action_txt = "[ENTER] / Click to Shop   |   [ESC] Leave"
-            else: action_txt = "[ENTER] / Click to Continue   |   [ESC] Leave"
+            if npc_name == 'Merchant': action_txt = "[SPACE] to Shop   |   [ESC] Leave"
+            else: action_txt = "[SPACE] to Continue   |   [ESC] Leave"
             
-            txt_color = CYAN_400 if hovering_dialogue else SLATE_400
-            action_surf = self.tiny_font.render(action_txt, True, txt_color)
+            action_surf = self.tiny_font.render(action_txt, True, CYAN_400)
             self.screen.blit(action_surf, (dialogue_box.right - action_surf.get_width() - 20, dialogue_box.bottom - 25))
         
         custom_cyan = (123, 165, 172)
@@ -904,13 +987,19 @@ class PygameApp:
         
         self.shop_potion_rect = pygame.Rect(200, 170, 400, 50)
         p_hover = self.shop_potion_rect.collidepoint(mx, my)
-        pygame.draw.rect(self.screen, (255,255,255, 20) if p_hover else (0,0,0,0), self.shop_potion_rect) 
+        if p_hover:
+            h_s = pygame.Surface((self.shop_potion_rect.w, self.shop_potion_rect.h), pygame.SRCALPHA)
+            h_s.fill((255, 255, 255, 25))
+            self.screen.blit(h_s, self.shop_potion_rect.topleft)
         self.screen.blit(self.btn_font.render("[1] Health Potion (50G)", True, EMERALD_500 if p_hover else EMERALD_400), (210, 175))
         self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, WHITE if p_hover else SLATE_400), (210, 200))
         
         self.shop_scroll_rect = pygame.Rect(200, 230, 400, 50)
         s_hover = self.shop_scroll_rect.collidepoint(mx, my)
-        pygame.draw.rect(self.screen, (255,255,255, 20) if s_hover else (0,0,0,0), self.shop_scroll_rect) 
+        if s_hover:
+            h_s = pygame.Surface((self.shop_scroll_rect.w, self.shop_scroll_rect.h), pygame.SRCALPHA)
+            h_s.fill((255, 255, 255, 25))
+            self.screen.blit(h_s, self.shop_scroll_rect.topleft)
         self.screen.blit(self.btn_font.render("[2] Hint Scroll (50G)", True, CYAN_500 if s_hover else CYAN_400), (210, 235))
         self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, WHITE if s_hover else SLATE_400), (210, 260))
         
@@ -936,15 +1025,39 @@ class PygameApp:
         mx, my = pygame.mouse.get_pos()
         self.upg_ares_rect = pygame.Rect(170, 170, 460, 50)
         a_hover = self.upg_ares_rect.collidepoint(mx, my)
-        pygame.draw.rect(self.screen, (255,255,255, 20) if a_hover else (0,0,0,0), self.upg_ares_rect) 
-        self.screen.blit(self.btn_font.render("[1] Ares' Power (Attack +5)", True, RED_500), (180, 175))
+        if a_hover:
+            h_s = pygame.Surface((self.upg_ares_rect.w, self.upg_ares_rect.h), pygame.SRCALPHA)
+            h_s.fill((255, 255, 255, 25))
+            self.screen.blit(h_s, self.upg_ares_rect.topleft)
+        
+        self.screen.blit(self.btn_font.render(f"[1] Ares' Power (Attack +{self.current_reward_atk})", True, RED_500), (180, 175))
         self.screen.blit(self.small_font.render(f"Current Base ATK: {self.player.base_attack}", True, WHITE if a_hover else SLATE_400), (180, 200))
         
         self.upg_demeter_rect = pygame.Rect(170, 230, 460, 50)
         d_hover = self.upg_demeter_rect.collidepoint(mx, my)
-        pygame.draw.rect(self.screen, (255,255,255, 20) if d_hover else (0,0,0,0), self.upg_demeter_rect) 
-        self.screen.blit(self.btn_font.render("[2] Demeter's Vitality (HP +20 & Heal)", True, EMERALD_400), (180, 235))
+        if d_hover:
+            h_s = pygame.Surface((self.upg_demeter_rect.w, self.upg_demeter_rect.h), pygame.SRCALPHA)
+            h_s.fill((255, 255, 255, 25))
+            self.screen.blit(h_s, self.upg_demeter_rect.topleft)
+        
+        self.screen.blit(self.btn_font.render(f"[2] Demeter's Vitality (Max HP +{self.current_reward_hp} & Heal)", True, EMERALD_400), (180, 235))
         self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, WHITE if d_hover else SLATE_400), (180, 260))
+
+    def draw_modern_hp_bar(self, surface, x, y, curr, max_hp, fill, name):
+        panel_w = 300
+        pygame.draw.rect(surface, (15, 23, 42, 220), (x, y, panel_w, 80)) 
+        
+        name_surf = self.small_font.render(name, True, WHITE)
+        surface.blit(name_surf, (x + 15, y + 15))
+        
+        ratio = max(0.0, min(1.0, curr / max_hp))
+        pct = int(ratio * 100)
+        txt = self.small_font.render(f"{curr}/{max_hp} HP", True, SLATE_400)
+        surface.blit(txt, (x + panel_w - 15 - txt.get_width(), y + 15))
+        
+        bx, by, bw, bh = x + 15, y + 45, panel_w - 30, 20
+        pygame.draw.rect(surface, BLACK, (bx, by, bw, bh)) 
+        if ratio > 0: pygame.draw.rect(surface, fill, (bx, by, int(bw * ratio), bh)) 
 
     def draw_battle(self):
         shake_x = random.randint(-self.shake_amount, self.shake_amount) if self.shake_timer > 0 else 0
@@ -974,21 +1087,9 @@ class PygameApp:
         battle_surf.blit(self.enemy_battle_img, (self.enemy_battle_pos[0] + self.e_anim_x, self.enemy_battle_pos[1] + fo))
         battle_surf.blit(self.player_battle_img, (self.player_battle_pos[0] + self.p_anim_x, self.player_battle_pos[1] - fo))
         
-        for idx, (p_pos, p_max_hp, p_hp, p_fill, p_name) in enumerate([((40, 30), self.enemy.max_hp, self.enemy.current_hp, RED_500, self.enemy.name.upper()), ((460, 320), self.player_max_hp, self.player.hp, EMERALD_500, "PLAYER")]):
-            panel_w = 300
-            pygame.draw.rect(battle_surf, (15, 23, 42, 220), (p_pos[0], p_pos[1], panel_w, 80)) 
-            
-            name_surf = self.small_font.render(p_name, True, WHITE) 
-            battle_surf.blit(name_surf, (p_pos[0] + 15, p_pos[1] + 15)) 
-            
-            ratio = max(0, p_hp) / p_max_hp
-            txt = self.small_font.render(f"{max(0, p_hp)}/{p_max_hp} HP", True, SLATE_400)
-            battle_surf.blit(txt, (p_pos[0] + panel_w - 15 - txt.get_width(), p_pos[1] + 15))
-            
-            bx, by, bw, bh = p_pos[0] + 15, p_pos[1] + 45, panel_w - 30, 20
-            pygame.draw.rect(battle_surf, BLACK, (bx, by, bw, bh)) 
-            if ratio > 0: pygame.draw.rect(battle_surf, p_fill, (bx, by, int(bw * ratio), bh)) 
-
+        self.draw_modern_hp_bar(battle_surf, 40, 30, self.enemy.current_hp, self.enemy.max_hp, RED_500, self.enemy.name.upper())
+        self.draw_modern_hp_bar(battle_surf, 460, 320, self.player.hp, self.player_max_hp, EMERALD_500, "PLAYER")
+        
         if self.player.combo_count > 0:
             bonus_dmg = int(self.player.combo_count * 20)
             combo_txt = self.btn_font.render(f"COMBO x{self.player.combo_count} (ATK +{bonus_dmg}%)", True, AMBER_400)
