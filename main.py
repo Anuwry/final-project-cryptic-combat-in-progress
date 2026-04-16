@@ -119,7 +119,6 @@ class PygameApp:
         self.setup_selection()
         self.setup_overworld()
         
-        # 🟢 แจกไอเทมเริ่มเกม
         self.add_item('compass', 'Compass', 'Teleport to Sanctuary', 1)
         self.add_item('potion', 'Health Potion', 'Heals 50 HP', 2)
         self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 3) 
@@ -299,7 +298,9 @@ class PygameApp:
                     self.spawn_floating_text("Already at Sanctuary", px - 75, py, WHITE, 'small')
                 else:
                     self.change_realm(0, 0, 'teleport')
-                    self.spawn_floating_text("Returned to Sanctuary", px - 85, py, WHITE, 'small')
+                    npx = self.map_player_pos[0] + self.game_map.camera_offset[0] + 32
+                    npy = self.map_player_pos[1] + self.game_map.camera_offset[1] - 20
+                    self.spawn_floating_text("Returned to Sanctuary", npx - 80, npy, WHITE, 'small')
             else:
                 self.spawn_floating_text("Can't use now", px - 50, py, RED_500, 'small')
                 
@@ -349,7 +350,7 @@ class PygameApp:
                 if hasattr(self, 'game_map'): self.game_map.save_map()
                 self.gm.export_data_to_csv(); pygame.quit(); sys.exit()
                 
-            if self.state in [STATE_OVERWORLD]: # เปิดให้จัดเรียงกระเป๋าแค่ตอนเดิน
+            if self.state in [STATE_OVERWORLD]: 
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     slot_idx = self.get_hovered_slot(event.pos)
                     if slot_idx is not None and self.inventory[slot_idx]:
@@ -447,34 +448,33 @@ class PygameApp:
                     else:
                         if event.key == pygame.K_ESCAPE:
                             self.state = STATE_OVERWORLD
-                        # 🟢 คีย์ลัดตอนสู้: กด 1 หายากินอัตโนมัติ
                         elif event.key == pygame.K_1:
-                            potion_slot = next((item for item in self.inventory if item and item['id'] == 'potion'), None)
-                            if potion_slot:
+                            potion_idx = next((i for i, item in enumerate(self.inventory) if item and item['id'] == 'potion'), None)
+                            if potion_idx is not None:
                                 if self.player.hp < self.player_max_hp:
-                                    self.player.hp = min(self.player_max_hp, self.player.hp + 50)
-                                    self.spawn_floating_text("+50 HP", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, EMERALD_400)
-                                    potion_slot['qty'] -= 1
-                                    if potion_slot['qty'] <= 0: self.inventory[self.inventory.index(potion_slot)] = None
+                                    heal_amount = 50
+                                    self.player.hp = min(self.player_max_hp, self.player.hp + heal_amount)
+                                    self.spawn_floating_text(f"+{heal_amount} HP", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, EMERALD_400, 'small')
+                                    self.inventory[potion_idx]['qty'] -= 1
+                                    if self.inventory[potion_idx]['qty'] <= 0: self.inventory[potion_idx] = None
                                 else:
                                     self.spawn_floating_text("HP is Full", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, WHITE, 'small')
                             else:
                                 self.spawn_floating_text("No Potions", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, RED_500, 'small')
                         
-                        # 🟢 คีย์ลัดตอนสู้: กด 2 หาคัมภีร์ใบ้คำอัตโนมัติ
                         elif event.key == pygame.K_2:
-                            scroll_slot = next((item for item in self.inventory if item and item['id'] == 'scroll'), None)
-                            if scroll_slot:
+                            scroll_idx = next((i for i, item in enumerate(self.inventory) if item and item['id'] == 'scroll'), None)
+                            if scroll_idx is not None:
                                 for idx, c in enumerate(self.target_word):
                                     if self.green_letters[idx] is None:
                                         self.green_letters[idx] = c
                                         self.spawn_floating_text("Hint Used!", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, CYAN_400, 'small')
-                                        scroll_slot['qty'] -= 1
-                                        if scroll_slot['qty'] <= 0: self.inventory[self.inventory.index(scroll_slot)] = None
+                                        self.inventory[scroll_idx]['qty'] -= 1
+                                        if self.inventory[scroll_idx]['qty'] <= 0: self.inventory[scroll_idx] = None
                                         break
                             else:
                                 self.spawn_floating_text("No Scrolls", self.player_battle_pos[0] + 60, self.player_battle_pos[1] - 30, RED_500, 'small')
-                                
+                        
                         elif event.unicode.isascii() and event.unicode.isalpha() and len(self.current_guess) < 5:
                             self.current_guess += event.unicode.upper(); self.gm.keystroke_count += 1
                         elif event.key == pygame.K_BACKSPACE: self.current_guess = self.current_guess[:-1]; self.gm.keystroke_count += 1
@@ -522,7 +522,9 @@ class PygameApp:
         self.target_word = self.dictionary.generate_random_word()
         self.board.current_attempt = 1
         self.guess_history = []
-        self.absent_letters, self.yellow_letters = set(), set()
+        self.absent_letters = set()
+        self.yellow_letters = set()
+        self.green_letters = [None] * 5 
         self.gm.start_word_timer()
 
     def draw_category_ui(self, cat, start_x, start_y):
@@ -934,7 +936,6 @@ class PygameApp:
         pygame.draw.rect(battle_surf, (15, 23, 42, 240), (0, board_start_y, 800, 160))
         pygame.draw.line(battle_surf, SLATE_700, (0, board_start_y), (800, board_start_y), 2)
 
-        # 🟢 UI คำแนะนำเมนูของฉากต่อสู้
         total_potions = sum([item['qty'] for item in self.inventory if item and item['id'] == 'potion'])
         total_scrolls = sum([item['qty'] for item in self.inventory if item and item['id'] == 'scroll'])
         
