@@ -3,6 +3,7 @@ import sys
 import os
 import math
 import random
+import json
 from src.config import DATA_DIR, RAW_DATA_DIR, WORDS_DATA_DIR, BASE_DIR
 from src.game_manager import GameManager
 from src.entities import Player, Enemy
@@ -30,6 +31,7 @@ STATE_OVERWORLD = 1
 STATE_BATTLE = 2
 STATE_SHOP = 3
 STATE_UPGRADE = 4
+STATE_WARP = 5
 
 class SpriteSheet:
     def __init__(self, filename):
@@ -94,11 +96,18 @@ class PygameApp:
         
         self.current_reward_atk = 5
         self.current_reward_hp = 20
-        
         self.nearby_interactables = []
         self.interact_index = 0
+        self.enemy_hit_count = 0  
         
-        self.enemy_hit_count = 0 
+        self.last_normal_realm = (0, 0)
+        self.pending_warp_idx = -1
+        self.defeated_bosses = {}
+        
+        db_path = os.path.join(BASE_DIR, "data/defeated_bosses.json")
+        if os.path.exists(db_path):
+            with open(db_path, 'r') as f:
+                self.defeated_bosses = json.load(f)
         
         self.generated_boss_levels = set()
         maps_dir = os.path.join(BASE_DIR, "data/maps")
@@ -145,7 +154,7 @@ class PygameApp:
         self.setup_selection()
         self.setup_overworld()
         
-        self.add_item('compass', 'Compass', 'Teleport to Sanctuary', 1)
+        self.add_item('compass', 'Warp Scroll', 'Teleports you safely', 1)
         self.add_item('potion', 'Health Potion', 'Heals 50 HP', 2)
         self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 3) 
 
@@ -180,6 +189,11 @@ class PygameApp:
         pygame.draw.rect(scroll_img, CYAN_500, (6, 12, 20, 5))
         pygame.draw.rect(scroll_img, BLACK, (8, 8, 16, 20), 2) 
         self.item_icons['scroll'] = scroll_img
+        
+        self.boss_bgs = {}
+        for god in ["Zeus", "Poseidon", "Hades", "Ares", "Athena", "Apollo", "Hermes"]:
+            path = os.path.join(BASE_DIR, f"assets/images/{god.lower()}_full.png")
+            self.boss_bgs[god] = pygame.transform.scale(self.load_image_safely(path, (800, 600), (20, 20, 30)), (800, 600))
 
     def add_item(self, item_id, name, desc, qty=1):
         for slot in self.inventory:
@@ -243,6 +257,9 @@ class PygameApp:
     def change_realm(self, target_x, target_y, exit_side):
         self.game_map.save_map()
         
+        if not self.game_map.is_boss_realm:
+            self.last_normal_realm = (self.realm_x, self.realm_y)
+        
         target_level = abs(target_x) + abs(target_y) + 1
         is_boss_tier = (target_level > 1 and target_level % 5 == 0)
         target_file = os.path.join(BASE_DIR, f"data/maps/realm_{target_x}_{target_y}.json")
@@ -265,16 +282,30 @@ class PygameApp:
         map_pixel_width = self.game_map.width * 64
         map_pixel_height = self.game_map.height * 64
         
-        if exit_side == 'right': self.map_player_pos = [64, 13 * 64]
-        elif exit_side == 'left': self.map_player_pos = [map_pixel_width - 128, 13 * 64]
-        elif exit_side == 'bottom': self.map_player_pos = [15 * 64, 64]
-        elif exit_side == 'top': self.map_player_pos = [15 * 64, map_pixel_height - 128]
-        elif exit_side == 'teleport': self.map_player_pos = [14 * 64, 15 * 64] 
+        if self.game_map.is_boss_realm:
+            self.map_player_pos = list(self.game_map.spawn_point)
+        else:
+            clamped_x = max(64, min(self.map_player_pos[0], map_pixel_width - 128))
+            clamped_y = max(64, min(self.map_player_pos[1], map_pixel_height - 128))
+            
+            if exit_side == 'right': self.map_player_pos = [64, clamped_y]
+            elif exit_side == 'left': self.map_player_pos = [map_pixel_width - 128, clamped_y]
+            elif exit_side == 'bottom': self.map_player_pos = [clamped_x, 64]
+            elif exit_side == 'top': self.map_player_pos = [clamped_x, map_pixel_height - 128]
+            elif exit_side == 'teleport': self.map_player_pos = [14 * 64, 15 * 64] 
             
         self.game_map.ensure_safe_spawn(self.map_player_pos[0], self.map_player_pos[1])
         self.facing_left_overworld = False
         self.game_map.camera_offset = [0, 0]
         self.game_map.target_camera_offset = [0, 0]
+
+    def execute_warp(self, tx, ty):
+        item = self.inventory[self.pending_warp_idx]
+        item['qty'] -= 1
+        if item['qty'] <= 0:
+            self.inventory[self.pending_warp_idx] = None
+        self.change_realm(tx, ty, 'teleport')
+        self.state = STATE_OVERWORLD
 
     def spawn_floating_text(self, text, x, y, color, font_type='large'):
         self.floating_texts.append({'text': text, 'x': x, 'y': y, 'timer': 45, 'color': color, 'font_type': font_type})
@@ -305,7 +336,7 @@ class PygameApp:
             self.enemy_reward = 20
             
         self.enemy = Enemy(name=name, max_hp=max_hp, attack_power=atk)
-        self.enemy_hit_count = 0
+        self.enemy_hit_count = 0 
         
         enemy_layers = [
             random.choice(self.options['base']), 
@@ -335,11 +366,8 @@ class PygameApp:
         
         if item['id'] == 'compass':
             if self.state == STATE_OVERWORLD:
-                if self.realm_x == 0 and self.realm_y == 0:
-                    self.spawn_floating_text("Already at Sanctuary", px, py, WHITE, 'tiny')
-                else:
-                    self.change_realm(0, 0, 'teleport')
-                    self.spawn_floating_text("Teleported!", px, py, WHITE, 'tiny')
+                self.pending_warp_idx = hotbar_idx
+                self.state = STATE_WARP
             else:
                 self.spawn_floating_text("Can't use now", px, py, RED_500, 'tiny')
                 
@@ -426,6 +454,21 @@ class PygameApp:
                             self.inventory[self.dragged_from_idx] = self.dragged_item
                         self.dragged_item = None
                         self.dragged_from_idx = -1
+
+            elif self.state == STATE_WARP:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.state = STATE_OVERWORLD
+                    elif event.key == pygame.K_1:
+                        self.execute_warp(0, 0)
+                    elif event.key == pygame.K_2:
+                        self.execute_warp(self.last_normal_realm[0], self.last_normal_realm[1])
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    if pygame.Rect(170, 240, 460, 50).collidepoint(mx, my):
+                        self.execute_warp(0, 0)
+                    elif pygame.Rect(170, 300, 460, 50).collidepoint(mx, my):
+                        self.execute_warp(self.last_normal_realm[0], self.last_normal_realm[1])
 
             elif self.state == STATE_SHOP:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -538,6 +581,17 @@ class PygameApp:
                                 if tier == 'Boss':
                                     self.current_reward_atk = random.randint(8, 15)
                                     self.current_reward_hp = random.randint(40, 60)
+                                    
+                                    self.add_item('compass', 'Warp Scroll', 'Teleports you safely', 1)
+                                    self.spawn_floating_text("+1 Warp Scroll", 400, 200, CYAN_400)
+                                    
+                                    k = f"{self.realm_x}_{self.realm_y}"
+                                    self.defeated_bosses[k] = self.game_map.god_theme
+                                    db_path = os.path.join(BASE_DIR, "data/defeated_bosses.json")
+                                    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+                                    with open(db_path, 'w') as f:
+                                        json.dump(self.defeated_bosses, f)
+                                        
                                 elif tier == 'Apostle':
                                     self.current_reward_atk = random.randint(4, 8)
                                     self.current_reward_hp = random.randint(20, 35)
@@ -742,7 +796,6 @@ class PygameApp:
         self.is_moving = False
         
         old_x, old_y = self.map_player_pos[0], self.map_player_pos[1]
-        
         menu_active = hasattr(self, 'nearby_interactables') and len(self.nearby_interactables) > 1 and not self.showing_dialogue
         
         if keys[pygame.K_LEFT] or keys[pygame.K_a]: 
@@ -762,29 +815,43 @@ class PygameApp:
                 self.map_player_pos[1] += self.map_player_speed
                 self.is_moving = True
         
-        if self.game_map.check_collision_at(self.map_player_pos[0], self.map_player_pos[1], 64, 64):
-            self.map_player_pos[0] = old_x
-            self.map_player_pos[1] = old_y
+        if self.game_map.is_boss_realm:
+            self.map_player_pos[0] = max(80, min(720 - 64, self.map_player_pos[0]))
+            self.map_player_pos[1] = max(80, min(520 - 64, self.map_player_pos[1]))
+            will_change = False
+        else:
+            if self.game_map.check_collision_at(self.map_player_pos[0], self.map_player_pos[1], 64, 64):
+                self.map_player_pos[0] = old_x
+                self.map_player_pos[1] = old_y
+                
+            map_pixel_width = self.game_map.width * 64
+            map_pixel_height = self.game_map.height * 64
             
-        map_pixel_width = self.game_map.width * 64
-        map_pixel_height = self.game_map.height * 64
-        
-        edge_threshold = 10
-        
-        target_rx, target_ry = self.realm_x, self.realm_y
-        will_change = False
-        exit_side = ''
+            edge_threshold = 10
+            target_rx, target_ry = self.realm_x, self.realm_y
+            will_change = False
+            exit_side = ''
 
-        if self.map_player_pos[0] > map_pixel_width - 64 - edge_threshold:
-            target_rx += 1; will_change = True; exit_side = 'right'
-        elif self.map_player_pos[0] < edge_threshold:
-            target_rx -= 1; will_change = True; exit_side = 'left'
-        elif self.map_player_pos[1] > map_pixel_height - 64 - edge_threshold:
-            target_ry += 1; will_change = True; exit_side = 'bottom'
-        elif self.map_player_pos[1] < edge_threshold:
-            target_ry -= 1; will_change = True; exit_side = 'top'
+            if self.map_player_pos[0] > map_pixel_width - 64 - edge_threshold:
+                target_rx += 1; will_change = True; exit_side = 'right'
+            elif self.map_player_pos[0] < edge_threshold:
+                target_rx -= 1; will_change = True; exit_side = 'left'
+            elif self.map_player_pos[1] > map_pixel_height - 64 - edge_threshold:
+                target_ry += 1; will_change = True; exit_side = 'bottom'
+            elif self.map_player_pos[1] < edge_threshold:
+                target_ry -= 1; will_change = True; exit_side = 'top'
 
         if will_change:
+            target_key = f"{target_rx}_{target_ry}"
+            if target_key in self.defeated_bosses:
+                self.map_player_pos[0] = old_x
+                self.map_player_pos[1] = old_y
+                px = self.map_player_pos[0] + self.game_map.camera_offset[0] + 32
+                py = self.map_player_pos[1] + self.game_map.camera_offset[1] - 20
+                if random.random() < 0.1:
+                    self.spawn_floating_text("PATH SEALED BY DIVINE AURA", px, py, RED_500, 'small')
+                return
+                
             self.change_realm(target_rx, target_ry, exit_side)
             return
         
@@ -864,7 +931,59 @@ class PygameApp:
             mx, my = pygame.mouse.get_pos()
             surface.blit(self.item_icons[self.dragged_item['id']], (mx - 16, my - 16))
 
+    def draw_sealed_auras(self):
+        aura_colors = {
+            "Zeus": (255, 255, 50, 100),
+            "Poseidon": (50, 100, 255, 100),
+            "Hades": (180, 50, 255, 100),
+            "Athena": (200, 200, 200, 100),
+            "Ares": (255, 50, 50, 100),
+            "Apollo": (255, 150, 50, 100),
+            "Hermes": (50, 255, 100, 100)
+        }
+        
+        if f"{self.realm_x}_{self.realm_y - 1}" in self.defeated_bosses:
+            god = self.defeated_bosses[f"{self.realm_x}_{self.realm_y - 1}"]
+            color = aura_colors.get(god, (255, 255, 255, 100))
+            s = pygame.Surface((self.screen_width, 60), pygame.SRCALPHA)
+            for i in range(60):
+                alpha = int(color[3] * (1 - i/60))
+                pygame.draw.line(s, (*color[:3], alpha), (0, i), (self.screen_width, i))
+            self.screen.blit(s, (0, 0))
+            
+        if f"{self.realm_x}_{self.realm_y + 1}" in self.defeated_bosses:
+            god = self.defeated_bosses[f"{self.realm_x}_{self.realm_y + 1}"]
+            color = aura_colors.get(god, (255, 255, 255, 100))
+            s = pygame.Surface((self.screen_width, 60), pygame.SRCALPHA)
+            for i in range(60):
+                alpha = int(color[3] * (i/60))
+                pygame.draw.line(s, (*color[:3], alpha), (0, i), (self.screen_width, i))
+            self.screen.blit(s, (0, self.screen_height - 60))
+            
+        if f"{self.realm_x - 1}_{self.realm_y}" in self.defeated_bosses:
+            god = self.defeated_bosses[f"{self.realm_x - 1}_{self.realm_y}"]
+            color = aura_colors.get(god, (255, 255, 255, 100))
+            s = pygame.Surface((60, self.screen_height), pygame.SRCALPHA)
+            for i in range(60):
+                alpha = int(color[3] * (1 - i/60))
+                pygame.draw.line(s, (*color[:3], alpha), (i, 0), (i, self.screen_height))
+            self.screen.blit(s, (0, 0))
+            
+        if f"{self.realm_x + 1}_{self.realm_y}" in self.defeated_bosses:
+            god = self.defeated_bosses[f"{self.realm_x + 1}_{self.realm_y}"]
+            color = aura_colors.get(god, (255, 255, 255, 100))
+            s = pygame.Surface((60, self.screen_height), pygame.SRCALPHA)
+            for i in range(60):
+                alpha = int(color[3] * (i/60))
+                pygame.draw.line(s, (*color[:3], alpha), (i, 0), (i, self.screen_height))
+            self.screen.blit(s, (self.screen_width - 60, 0))
+
     def draw_overworld(self):
+        if self.game_map.is_boss_realm and self.game_map.god_theme:
+            bg = self.boss_bgs.get(self.game_map.god_theme)
+            if bg:
+                self.screen.blit(bg, (0, 0))
+        
         self.game_map.draw(self.screen)
         
         img = self.player_overworld_equipped_img
@@ -875,6 +994,8 @@ class PygameApp:
         player_screen_x = self.map_player_pos[0] + self.game_map.camera_offset[0]
         player_screen_y = self.map_player_pos[1] + self.game_map.camera_offset[1]
         self.screen.blit(img, (player_screen_x, player_screen_y - by))
+        
+        self.draw_sealed_auras()
         
         if hasattr(self, 'nearby_interactables') and self.nearby_interactables and not self.showing_dialogue:
             if self.interact_index >= len(self.nearby_interactables):
@@ -965,47 +1086,74 @@ class PygameApp:
             t['timer'] -= 1
             if t['timer'] <= 0: self.floating_texts.remove(t)
 
+    def draw_warp_menu(self):
+        self.draw_overworld()
+        overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180)) 
+        self.screen.blit(overlay, (0, 0))
+        
+        box = pygame.Rect(150, 150, 500, 260)
+        pygame.draw.rect(self.screen, (15, 23, 42), box)
+        pygame.draw.rect(self.screen, CYAN_500, box, 2)
+        
+        self.screen.blit(self.font.render("USE WARP SCROLL", True, CYAN_400), (180, 170))
+        self.screen.blit(self.small_font.render("Select your destination:", True, WHITE), (180, 210))
+        
+        mx, my = pygame.mouse.get_pos()
+        
+        b1 = pygame.Rect(170, 240, 460, 50)
+        h1 = b1.collidepoint(mx, my)
+        pygame.draw.rect(self.screen, (255,255,255, 20) if h1 else (0,0,0,0), b1)
+        self.screen.blit(self.btn_font.render("[1] Sanctuary (Base)", True, EMERALD_400), (180, 255))
+        
+        b2 = pygame.Rect(170, 300, 460, 50)
+        h2 = b2.collidepoint(mx, my)
+        pygame.draw.rect(self.screen, (255,255,255, 20) if h2 else (0,0,0,0), b2)
+        self.screen.blit(self.btn_font.render(f"[2] Previous Area ({self.last_normal_realm[0]}, {self.last_normal_realm[1]})", True, AMBER_400), (180, 315))
+        
+        self.screen.blit(self.small_font.render("[ESC] Cancel", True, GRAY), (180, 370))
+
     def draw_shop(self):
         self.draw_overworld()
         overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 150)) 
         self.screen.blit(overlay, (0, 0))
         
-        box = pygame.Rect(180, 80, 440, 260) 
+        box = pygame.Rect(180, 150, 440, 260) 
         s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
         pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect()) 
         pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1) 
         self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.font.render("MERCHANT'S SHOP", True, AMBER_500), (210, 100))
-        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (210, 140))
+        self.screen.blit(self.font.render("MERCHANT'S SHOP", True, AMBER_500), (210, 170))
+        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (210, 210))
         
         potions_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'potion'])
         scrolls_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'scroll'])
         
         mx, my = pygame.mouse.get_pos()
         
-        self.shop_potion_rect = pygame.Rect(200, 170, 400, 50)
+        self.shop_potion_rect = pygame.Rect(200, 240, 400, 50)
         p_hover = self.shop_potion_rect.collidepoint(mx, my)
         if p_hover:
             h_s = pygame.Surface((self.shop_potion_rect.w, self.shop_potion_rect.h), pygame.SRCALPHA)
             h_s.fill((255, 255, 255, 25))
             self.screen.blit(h_s, self.shop_potion_rect.topleft)
-        self.screen.blit(self.btn_font.render("[1] Health Potion (50G)", True, EMERALD_500 if p_hover else EMERALD_400), (210, 175))
-        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, WHITE if p_hover else SLATE_400), (210, 200))
+        self.screen.blit(self.btn_font.render("[1] Health Potion (50G)", True, EMERALD_500 if p_hover else EMERALD_400), (210, 245))
+        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, WHITE if p_hover else SLATE_400), (210, 270))
         
-        self.shop_scroll_rect = pygame.Rect(200, 230, 400, 50)
+        self.shop_scroll_rect = pygame.Rect(200, 300, 400, 50)
         s_hover = self.shop_scroll_rect.collidepoint(mx, my)
         if s_hover:
             h_s = pygame.Surface((self.shop_scroll_rect.w, self.shop_scroll_rect.h), pygame.SRCALPHA)
             h_s.fill((255, 255, 255, 25))
             self.screen.blit(h_s, self.shop_scroll_rect.topleft)
-        self.screen.blit(self.btn_font.render("[2] Hint Scroll (50G)", True, CYAN_500 if s_hover else CYAN_400), (210, 235))
-        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, WHITE if s_hover else SLATE_400), (210, 260))
+        self.screen.blit(self.btn_font.render("[2] Hint Scroll (50G)", True, CYAN_500 if s_hover else CYAN_400), (210, 305))
+        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, WHITE if s_hover else SLATE_400), (210, 330))
         
-        self.shop_exit_rect = pygame.Rect(200, 295, 400, 30)
+        self.shop_exit_rect = pygame.Rect(200, 365, 400, 30)
         e_hover = self.shop_exit_rect.collidepoint(mx, my)
-        self.screen.blit(self.small_font.render("[ESC] / Click here to leave", True, RED_500 if e_hover else GRAY), (210, 300))
+        self.screen.blit(self.small_font.render("[ESC] / Click here to leave", True, RED_500 if e_hover else GRAY), (210, 370))
 
     def draw_upgrade(self):
         self.draw_overworld()
@@ -1013,35 +1161,35 @@ class PygameApp:
         overlay.fill((0, 0, 0, 150)) 
         self.screen.blit(overlay, (0, 0))
         
-        box = pygame.Rect(150, 80, 500, 260)
+        box = pygame.Rect(150, 150, 500, 260)
         s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
         pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect()) 
         pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1) 
         self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.font.render("STATUE DESTROYED!", True, AMBER_500), (180, 100))
-        self.screen.blit(self.small_font.render("Blessing received! Choose an upgrade:", True, WHITE), (180, 140))
+        self.screen.blit(self.font.render("STATUE DESTROYED!", True, AMBER_500), (180, 170))
+        self.screen.blit(self.small_font.render("Blessing received! Choose an upgrade:", True, WHITE), (180, 210))
         
         mx, my = pygame.mouse.get_pos()
-        self.upg_ares_rect = pygame.Rect(170, 170, 460, 50)
+        self.upg_ares_rect = pygame.Rect(170, 240, 460, 50)
         a_hover = self.upg_ares_rect.collidepoint(mx, my)
         if a_hover:
             h_s = pygame.Surface((self.upg_ares_rect.w, self.upg_ares_rect.h), pygame.SRCALPHA)
             h_s.fill((255, 255, 255, 25))
             self.screen.blit(h_s, self.upg_ares_rect.topleft)
         
-        self.screen.blit(self.btn_font.render(f"[1] Ares' Power (Attack +{self.current_reward_atk})", True, RED_500), (180, 175))
-        self.screen.blit(self.small_font.render(f"Current Base ATK: {self.player.base_attack}", True, WHITE if a_hover else SLATE_400), (180, 200))
+        self.screen.blit(self.btn_font.render(f"[1] Ares' Power (Attack +{self.current_reward_atk})", True, RED_500), (180, 245))
+        self.screen.blit(self.small_font.render(f"Current Base ATK: {self.base_atk}", True, WHITE if a_hover else SLATE_400), (180, 270))
         
-        self.upg_demeter_rect = pygame.Rect(170, 230, 460, 50)
+        self.upg_demeter_rect = pygame.Rect(170, 300, 460, 50)
         d_hover = self.upg_demeter_rect.collidepoint(mx, my)
         if d_hover:
             h_s = pygame.Surface((self.upg_demeter_rect.w, self.upg_demeter_rect.h), pygame.SRCALPHA)
             h_s.fill((255, 255, 255, 25))
             self.screen.blit(h_s, self.upg_demeter_rect.topleft)
         
-        self.screen.blit(self.btn_font.render(f"[2] Demeter's Vitality (Max HP +{self.current_reward_hp} & Heal)", True, EMERALD_400), (180, 235))
-        self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, WHITE if d_hover else SLATE_400), (180, 260))
+        self.screen.blit(self.btn_font.render(f"[2] Demeter's Vitality (Max HP +{self.current_reward_hp} & Heal)", True, EMERALD_400), (180, 305))
+        self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, WHITE if d_hover else SLATE_400), (180, 330))
 
     def draw_modern_hp_bar(self, surface, x, y, curr, max_hp, fill, name):
         panel_w = 300
@@ -1065,12 +1213,16 @@ class PygameApp:
         if self.shake_timer > 0: self.shake_timer -= 1
         
         battle_surf = pygame.Surface((self.screen_width, self.screen_height))
-        battle_surf.blit(self.battle_bg, (0, 0))
         
-        if self.game_map.is_boss_realm:
+        if self.game_map.is_boss_realm and self.game_map.god_theme:
+            bg = self.boss_bgs.get(self.game_map.god_theme)
+            if bg:
+                battle_surf.blit(bg, (0, 0))
             overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-            overlay.fill((40, 0, 10, 120))
+            overlay.fill((15, 23, 42, 180))
             battle_surf.blit(overlay, (0, 0))
+        else:
+            battle_surf.blit(self.battle_bg, (0, 0))
         
         if self.p_anim_timer > 0:
             self.p_anim_x += 15 if self.p_anim_timer > 10 else -15
@@ -1201,6 +1353,7 @@ class PygameApp:
             elif self.state == STATE_BATTLE: self.draw_battle()
             elif self.state == STATE_SHOP: self.draw_shop()
             elif self.state == STATE_UPGRADE: self.draw_upgrade()
+            elif self.state == STATE_WARP: self.draw_warp_menu()
             pygame.display.flip(); clock.tick(60)
 
 if __name__ == "__main__":
