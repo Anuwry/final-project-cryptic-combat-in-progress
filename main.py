@@ -31,7 +31,7 @@ STATE_OVERWORLD = 1
 STATE_BATTLE = 2
 STATE_SHOP = 3
 STATE_UPGRADE = 4
-STATE_WARP = 5
+STATE_WARP = 5 
 
 class SpriteSheet:
     def __init__(self, filename):
@@ -61,6 +61,8 @@ class SpriteSheet:
 class PygameApp:
     def __init__(self):
         pygame.init()
+        pygame.mixer.init() 
+        
         self.screen_width = 800
         self.screen_height = 600
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
@@ -71,7 +73,7 @@ class PygameApp:
         self.font = pygame.font.Font(None, 40)
         self.name_font = pygame.font.Font(None, 32)
         self.btn_font = pygame.font.Font(None, 28)
-        self.small_font = pygame.font.Font(None, 22)
+        self.small_font = pygame.font.Font(None, 24)
         self.tiny_font = pygame.font.Font(None, 18) 
         
         self.state = STATE_SELECTION
@@ -96,18 +98,24 @@ class PygameApp:
         
         self.current_reward_atk = 5
         self.current_reward_hp = 20
+        
         self.nearby_interactables = []
         self.interact_index = 0
-        self.enemy_hit_count = 0  
         
+        self.enemy_hit_count = 0  
         self.last_normal_realm = (0, 0)
         self.pending_warp_idx = -1
-        self.defeated_bosses = {}
+        self.current_bgm = None
+        self.defeated_bosses = {} 
+        self.current_battle_bg = None 
         
         db_path = os.path.join(BASE_DIR, "data/defeated_bosses.json")
         if os.path.exists(db_path):
-            with open(db_path, 'r') as f:
-                self.defeated_bosses = json.load(f)
+            try:
+                with open(db_path, 'r') as f:
+                    self.defeated_bosses = json.load(f)
+            except json.JSONDecodeError:
+                self.defeated_bosses = {}
         
         self.generated_boss_levels = set()
         maps_dir = os.path.join(BASE_DIR, "data/maps")
@@ -158,9 +166,40 @@ class PygameApp:
         self.add_item('potion', 'Health Potion', 'Heals 50 HP', 2)
         self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 3) 
 
+    def play_god_bgm(self, god_name):
+        base_path = os.path.join(BASE_DIR, "assets", "sounds", f"{god_name.lower()}_bgm")
+        possible_paths = [f"{base_path}.mp3", f"{base_path}.wav", f"{base_path}.ogg"]
+
+        if self.current_bgm != god_name:
+            loaded = False
+            for path in possible_paths:
+                if os.path.exists(path):
+                    try:
+                        pygame.mixer.music.load(path)
+                        pygame.mixer.music.play(-1) 
+                        self.current_bgm = god_name
+                        loaded = True
+                        break
+                    except Exception as e:
+                        print(f"Error playing music {path}: {e}")
+            if not loaded:
+                pygame.mixer.music.stop()
+                self.current_bgm = None
+                print(f"Missing BGM for: {god_name}")
+
+    def stop_music(self):
+        pygame.mixer.music.stop()
+        self.current_bgm = None
+
     def load_image_safely(self, path, size, fallback_color):
-        if os.path.exists(path): return pygame.transform.scale(pygame.image.load(path).convert_alpha(), size)
-        surf = pygame.Surface(size); surf.fill(fallback_color); return surf
+        if os.path.exists(path): 
+            try:
+                return pygame.transform.scale(pygame.image.load(path).convert_alpha(), size)
+            except:
+                pass
+        surf = pygame.Surface(size)
+        surf.fill(fallback_color)
+        return surf
 
     def setup_assets(self):
         map_bg_path = os.path.join(BASE_DIR, "assets", "images", "map_bg.png")
@@ -189,11 +228,6 @@ class PygameApp:
         pygame.draw.rect(scroll_img, CYAN_500, (6, 12, 20, 5))
         pygame.draw.rect(scroll_img, BLACK, (8, 8, 16, 20), 2) 
         self.item_icons['scroll'] = scroll_img
-        
-        self.boss_bgs = {}
-        for god in ["Zeus", "Poseidon", "Hades", "Ares", "Athena", "Apollo", "Hermes"]:
-            path = os.path.join(BASE_DIR, f"assets/images/{god.lower()}_full.png")
-            self.boss_bgs[god] = pygame.transform.scale(self.load_image_safely(path, (800, 600), (20, 20, 30)), (800, 600))
 
     def add_item(self, item_id, name, desc, qty=1):
         for slot in self.inventory:
@@ -276,6 +310,11 @@ class PygameApp:
         self.current_level = target_level
         self.game_map = GameMap(self.realm_x, self.realm_y, force_normal)
         
+        if self.game_map.is_boss_realm and self.game_map.god_theme:
+            self.play_god_bgm(self.game_map.god_theme)
+        else:
+            self.stop_music()
+        
         self.total_statues = len(self.game_map.get_statues())
         self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
         
@@ -288,11 +327,11 @@ class PygameApp:
             clamped_x = max(64, min(self.map_player_pos[0], map_pixel_width - 128))
             clamped_y = max(64, min(self.map_player_pos[1], map_pixel_height - 128))
             
-            if exit_side == 'right': self.map_player_pos = [64, clamped_y]
-            elif exit_side == 'left': self.map_player_pos = [map_pixel_width - 128, clamped_y]
-            elif exit_side == 'bottom': self.map_player_pos = [clamped_x, 64]
-            elif exit_side == 'top': self.map_player_pos = [clamped_x, map_pixel_height - 128]
-            elif exit_side == 'teleport': self.map_player_pos = [14 * 64, 15 * 64] 
+            if exit_side == 'right': self.map_player_pos = [64, 13 * 64]
+            elif exit_side == 'left': self.map_player_pos = [map_pixel_width - 128, 13 * 64]
+            elif exit_side == 'bottom': self.map_player_pos = [15 * 64, 64]
+            elif exit_side == 'top': self.map_player_pos = [15 * 64, map_pixel_height - 128]
+            elif exit_side == 'teleport': self.map_player_pos = [15 * 64, 15 * 64] 
             
         self.game_map.ensure_safe_spawn(self.map_player_pos[0], self.map_player_pos[1])
         self.facing_left_overworld = False
@@ -313,6 +352,19 @@ class PygameApp:
     def randomize_enemy(self):
         god = self.current_statue.data.get('god', 'Unknown')
         tier = self.current_statue.data.get('tier', 'Follower')
+        
+        role = "avatar" if tier.lower() == "boss" else tier.lower()
+        bg_name = f"{god.lower()}_{role}.png"
+        bg_path = os.path.join(BASE_DIR, "assets", "images", bg_name)
+        
+        self.current_battle_bg = None 
+        if os.path.exists(bg_path):
+            try:
+                img = pygame.image.load(bg_path).convert()
+                self.current_battle_bg = pygame.transform.scale(img, (800, 600))
+            except: pass
+        else:
+            print(f"Missing battle background for: {bg_name}")
         
         if tier == 'Boss':
             max_hp = 300 + (self.current_level * 50)
@@ -581,7 +633,6 @@ class PygameApp:
                                 if tier == 'Boss':
                                     self.current_reward_atk = random.randint(8, 15)
                                     self.current_reward_hp = random.randint(40, 60)
-                                    
                                     self.add_item('compass', 'Warp Scroll', 'Teleports you safely', 1)
                                     self.spawn_floating_text("+1 Warp Scroll", 400, 200, CYAN_400)
                                     
@@ -816,8 +867,8 @@ class PygameApp:
                 self.is_moving = True
         
         if self.game_map.is_boss_realm:
-            self.map_player_pos[0] = max(80, min(720 - 64, self.map_player_pos[0]))
-            self.map_player_pos[1] = max(80, min(520 - 64, self.map_player_pos[1]))
+            self.map_player_pos[0] = max(20, min(self.screen_width - 80, self.map_player_pos[0]))
+            self.map_player_pos[1] = max(20, min(self.screen_height - 80, self.map_player_pos[1]))
             will_change = False
         else:
             if self.game_map.check_collision_at(self.map_player_pos[0], self.map_player_pos[1], 64, 64):
@@ -979,11 +1030,7 @@ class PygameApp:
             self.screen.blit(s, (self.screen_width - 60, 0))
 
     def draw_overworld(self):
-        if self.game_map.is_boss_realm and self.game_map.god_theme:
-            bg = self.boss_bgs.get(self.game_map.god_theme)
-            if bg:
-                self.screen.blit(bg, (0, 0))
-        
+        self.screen.fill(BLACK)
         self.game_map.draw(self.screen)
         
         img = self.player_overworld_equipped_img
@@ -1096,8 +1143,7 @@ class PygameApp:
         pygame.draw.rect(self.screen, (15, 23, 42), box)
         pygame.draw.rect(self.screen, CYAN_500, box, 2)
         
-        self.screen.blit(self.font.render("USE WARP SCROLL", True, CYAN_400), (180, 170))
-        self.screen.blit(self.small_font.render("Select your destination:", True, WHITE), (180, 210))
+        self.screen.blit(self.font.render("WARP SCROLL", True, CYAN_400), (180, 180))
         
         mx, my = pygame.mouse.get_pos()
         
@@ -1111,7 +1157,7 @@ class PygameApp:
         pygame.draw.rect(self.screen, (255,255,255, 20) if h2 else (0,0,0,0), b2)
         self.screen.blit(self.btn_font.render(f"[2] Previous Area ({self.last_normal_realm[0]}, {self.last_normal_realm[1]})", True, AMBER_400), (180, 315))
         
-        self.screen.blit(self.small_font.render("[ESC] Cancel", True, GRAY), (180, 370))
+        self.screen.blit(self.tiny_font.render("[ESC] Cancel", True, GRAY), (180, 370))
 
     def draw_shop(self):
         self.draw_overworld()
@@ -1119,41 +1165,41 @@ class PygameApp:
         overlay.fill((0, 0, 0, 150)) 
         self.screen.blit(overlay, (0, 0))
         
-        box = pygame.Rect(180, 150, 440, 260) 
+        box = pygame.Rect(180, 80, 440, 260) 
         s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
         pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect()) 
         pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1) 
         self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.font.render("MERCHANT'S SHOP", True, AMBER_500), (210, 170))
-        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (210, 210))
+        self.screen.blit(self.font.render("MERCHANT'S SHOP", True, AMBER_500), (210, 100))
+        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (210, 140))
         
         potions_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'potion'])
         scrolls_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'scroll'])
         
         mx, my = pygame.mouse.get_pos()
         
-        self.shop_potion_rect = pygame.Rect(200, 240, 400, 50)
+        self.shop_potion_rect = pygame.Rect(200, 170, 400, 50)
         p_hover = self.shop_potion_rect.collidepoint(mx, my)
         if p_hover:
             h_s = pygame.Surface((self.shop_potion_rect.w, self.shop_potion_rect.h), pygame.SRCALPHA)
             h_s.fill((255, 255, 255, 25))
             self.screen.blit(h_s, self.shop_potion_rect.topleft)
-        self.screen.blit(self.btn_font.render("[1] Health Potion (50G)", True, EMERALD_500 if p_hover else EMERALD_400), (210, 245))
-        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, WHITE if p_hover else SLATE_400), (210, 270))
+        self.screen.blit(self.btn_font.render("[1] Health Potion (50G)", True, EMERALD_500 if p_hover else EMERALD_400), (210, 175))
+        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, WHITE if p_hover else SLATE_400), (210, 200))
         
-        self.shop_scroll_rect = pygame.Rect(200, 300, 400, 50)
+        self.shop_scroll_rect = pygame.Rect(200, 230, 400, 50)
         s_hover = self.shop_scroll_rect.collidepoint(mx, my)
         if s_hover:
             h_s = pygame.Surface((self.shop_scroll_rect.w, self.shop_scroll_rect.h), pygame.SRCALPHA)
             h_s.fill((255, 255, 255, 25))
             self.screen.blit(h_s, self.shop_scroll_rect.topleft)
-        self.screen.blit(self.btn_font.render("[2] Hint Scroll (50G)", True, CYAN_500 if s_hover else CYAN_400), (210, 305))
-        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, WHITE if s_hover else SLATE_400), (210, 330))
+        self.screen.blit(self.btn_font.render("[2] Hint Scroll (50G)", True, CYAN_500 if s_hover else CYAN_400), (210, 235))
+        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, WHITE if s_hover else SLATE_400), (210, 260))
         
-        self.shop_exit_rect = pygame.Rect(200, 365, 400, 30)
+        self.shop_exit_rect = pygame.Rect(200, 295, 400, 30)
         e_hover = self.shop_exit_rect.collidepoint(mx, my)
-        self.screen.blit(self.small_font.render("[ESC] / Click here to leave", True, RED_500 if e_hover else GRAY), (210, 370))
+        self.screen.blit(self.small_font.render("[ESC] / Click here to leave", True, RED_500 if e_hover else GRAY), (210, 300))
 
     def draw_upgrade(self):
         self.draw_overworld()
@@ -1161,35 +1207,35 @@ class PygameApp:
         overlay.fill((0, 0, 0, 150)) 
         self.screen.blit(overlay, (0, 0))
         
-        box = pygame.Rect(150, 150, 500, 260)
+        box = pygame.Rect(150, 80, 500, 260)
         s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
         pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect()) 
         pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1) 
         self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.font.render("STATUE DESTROYED!", True, AMBER_500), (180, 170))
-        self.screen.blit(self.small_font.render("Blessing received! Choose an upgrade:", True, WHITE), (180, 210))
+        self.screen.blit(self.font.render("STATUE DESTROYED!", True, AMBER_500), (180, 100))
+        self.screen.blit(self.small_font.render("Blessing received! Choose an upgrade:", True, WHITE), (180, 140))
         
         mx, my = pygame.mouse.get_pos()
-        self.upg_ares_rect = pygame.Rect(170, 240, 460, 50)
+        self.upg_ares_rect = pygame.Rect(170, 170, 460, 50)
         a_hover = self.upg_ares_rect.collidepoint(mx, my)
         if a_hover:
             h_s = pygame.Surface((self.upg_ares_rect.w, self.upg_ares_rect.h), pygame.SRCALPHA)
             h_s.fill((255, 255, 255, 25))
             self.screen.blit(h_s, self.upg_ares_rect.topleft)
         
-        self.screen.blit(self.btn_font.render(f"[1] Ares' Power (Attack +{self.current_reward_atk})", True, RED_500), (180, 245))
-        self.screen.blit(self.small_font.render(f"Current Base ATK: {self.base_atk}", True, WHITE if a_hover else SLATE_400), (180, 270))
+        self.screen.blit(self.btn_font.render(f"[1] Ares' Power (Attack +{self.current_reward_atk})", True, RED_500), (180, 175))
+        self.screen.blit(self.small_font.render(f"Current Base ATK: {self.player.base_attack}", True, WHITE if a_hover else SLATE_400), (180, 200))
         
-        self.upg_demeter_rect = pygame.Rect(170, 300, 460, 50)
+        self.upg_demeter_rect = pygame.Rect(170, 230, 460, 50)
         d_hover = self.upg_demeter_rect.collidepoint(mx, my)
         if d_hover:
             h_s = pygame.Surface((self.upg_demeter_rect.w, self.upg_demeter_rect.h), pygame.SRCALPHA)
             h_s.fill((255, 255, 255, 25))
             self.screen.blit(h_s, self.upg_demeter_rect.topleft)
         
-        self.screen.blit(self.btn_font.render(f"[2] Demeter's Vitality (Max HP +{self.current_reward_hp} & Heal)", True, EMERALD_400), (180, 305))
-        self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, WHITE if d_hover else SLATE_400), (180, 330))
+        self.screen.blit(self.btn_font.render(f"[2] Demeter's Vitality (Max HP +{self.current_reward_hp} & Heal)", True, EMERALD_400), (180, 235))
+        self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, WHITE if d_hover else SLATE_400), (180, 260))
 
     def draw_modern_hp_bar(self, surface, x, y, curr, max_hp, fill, name):
         panel_w = 300
@@ -1214,12 +1260,10 @@ class PygameApp:
         
         battle_surf = pygame.Surface((self.screen_width, self.screen_height))
         
-        if self.game_map.is_boss_realm and self.game_map.god_theme:
-            bg = self.boss_bgs.get(self.game_map.god_theme)
-            if bg:
-                battle_surf.blit(bg, (0, 0))
+        if self.current_battle_bg:
+            battle_surf.blit(self.current_battle_bg, (0, 0))
             overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-            overlay.fill((15, 23, 42, 180))
+            overlay.fill((15, 23, 42, 100)) 
             battle_surf.blit(overlay, (0, 0))
         else:
             battle_surf.blit(self.battle_bg, (0, 0))
@@ -1353,7 +1397,7 @@ class PygameApp:
             elif self.state == STATE_BATTLE: self.draw_battle()
             elif self.state == STATE_SHOP: self.draw_shop()
             elif self.state == STATE_UPGRADE: self.draw_upgrade()
-            elif self.state == STATE_WARP: self.draw_warp_menu()
+            elif self.state == STATE_WARP: self.draw_warp_menu() 
             pygame.display.flip(); clock.tick(60)
 
 if __name__ == "__main__":
