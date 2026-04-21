@@ -60,9 +60,7 @@ This project addresses both gaps by turning word solving into a direct combat sy
 [Project Proposal PDF](./cryptic-combat-project-proposal.pdf)
 
 ### YouTube Link
-**Status Unfinished**  
 The final presentation link is not attached yet  
-The target video length is about 7 minutes and should cover application demo, class design explanation, and statistics or data visualization explanation
 
 ---
 
