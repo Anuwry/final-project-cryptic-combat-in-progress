@@ -109,6 +109,11 @@ class PygameApp:
         self.sfx_volume = 0.8
         self.shake_enabled = True
         pygame.mixer.music.set_volume(self.bgm_volume)
+        self.music_tracks = {
+            "main_menu": os.path.join(BASE_DIR, "assets", "sounds", "main_menu.mp3"),
+            "overworld": os.path.join(BASE_DIR, "assets", "sounds", "overworld.mp3"),
+            "general_battle": os.path.join(BASE_DIR, "assets", "sounds", "general_battle.mp3"),
+        }
         
         self.saves = {"1": None, "2": None, "3": None}
         self.current_save_slot = None
@@ -190,6 +195,7 @@ class PygameApp:
         self.current_statue = None
         
         self.setup_overworld()
+        self.sync_music()
 
     def load_stats_csv(self):
         self.stats_data = {'time': [], 'attempts': [], 'combo': [], 'damage': [], 'keys': []}
@@ -263,11 +269,6 @@ class PygameApp:
         self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
         self.total_statues = len(self.game_map.get_statues())
         
-        if self.game_map.is_boss_realm and self.game_map.god_theme:
-            self.play_god_bgm(self.game_map.god_theme)
-        else:
-            self.stop_music()
-            
         self.setup_overworld()
         self.state = STATE_OVERWORLD
 
@@ -296,9 +297,26 @@ class PygameApp:
         self.map_player_pos = list(self.game_map.spawn_point)
         self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
         self.total_statues = len(self.game_map.get_statues())
-        self.stop_music()
         self.setup_overworld()
         self.state = STATE_SELECTION 
+
+    def play_music_track(self, track_name):
+        path = self.music_tracks.get(track_name)
+        if not path or not os.path.exists(path):
+            self.stop_music()
+            return
+
+        if self.current_bgm == track_name:
+            return
+
+        try:
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.play(-1)
+            pygame.mixer.music.set_volume(self.bgm_volume)
+            self.current_bgm = track_name
+        except Exception as e:
+            print(f"Error playing music {path}: {e}")
+            self.stop_music()
 
     def play_god_bgm(self, god_name):
         base_path = os.path.join(BASE_DIR, "assets", "sounds", f"{god_name.lower()}_bgm")
@@ -323,6 +341,23 @@ class PygameApp:
     def stop_music(self):
         pygame.mixer.music.stop()
         self.current_bgm = None
+
+    def sync_music(self):
+        if self.state in (STATE_MAIN_MENU, STATE_SAVE_SLOTS, STATE_SELECTION, STATE_SETTINGS):
+            self.play_music_track("main_menu")
+            return
+
+        if self.state == STATE_BATTLE:
+            statue_tier = self.current_statue.data.get('tier') if self.current_statue else None
+            if statue_tier == 'Boss' and self.current_statue:
+                self.play_god_bgm(self.current_statue.data.get('god', ''))
+            else:
+                self.play_music_track("general_battle")
+            return
+
+        if self.state in (STATE_OVERWORLD, STATE_SHOP, STATE_UPGRADE, STATE_WARP):
+            self.play_music_track("overworld")
+            return
 
     def load_image_safely(self, path, size, fallback_color):
         if os.path.exists(path): 
@@ -440,11 +475,6 @@ class PygameApp:
         self.realm_y = target_y
         self.current_level = target_level
         self.game_map = GameMap(self.realm_x, self.realm_y, force_normal)
-        
-        if self.game_map.is_boss_realm and self.game_map.god_theme:
-            self.play_god_bgm(self.game_map.god_theme)
-        else:
-            self.stop_music()
         
         self.total_statues = len(self.game_map.get_statues())
         self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
@@ -606,9 +636,12 @@ class PygameApp:
         for o in self.game_map.objects:
             if o.type == "statue" and not o.collected and check_rect.colliderect(o.rect):
                 interactables.append(o)
-            elif o.type in ("npc", "shop_npc") and check_rect.colliderect(o.rect):
+            elif o.type in ("npc", "shop_npc", "shop") and check_rect.colliderect(o.rect):
                 interactables.append(o)
         return interactables
+
+    def opens_shop(self, obj):
+        return bool(obj) and (obj.type == "shop" or obj.data.get('name') == 'Merchant')
 
     def handle_events(self):
         for event in pygame.event.get():
@@ -687,7 +720,7 @@ class PygameApp:
                         self.bgm_volume = min(1.0, self.bgm_volume + 0.1)
                         pygame.mixer.music.set_volume(self.bgm_volume)
                         
-                    if pygame.Rect(370, 280, 190, 35).collidepoint(mx, my):
+                    if pygame.Rect(410, 280, 190, 35).collidepoint(mx, my):
                         self.shake_enabled = not self.shake_enabled
                         
                     if self.state == STATE_PAUSE:
@@ -695,7 +728,6 @@ class PygameApp:
                             self.state = STATE_OVERWORLD
                         elif pygame.Rect(250, 430, 300, 45).collidepoint(mx, my):
                             self.save_game_data()
-                            self.stop_music()
                             self.state = STATE_MAIN_MENU
                     else:
                         if pygame.Rect(250, 430, 300, 45).collidepoint(mx, my):
@@ -718,7 +750,7 @@ class PygameApp:
                         dialogue_rect = pygame.Rect(100, 400, 600, 120)
                         if dialogue_rect.collidepoint(mx, my):
                             self.showing_dialogue = False
-                            if self.current_npc and self.current_npc.data.get('name') == 'Merchant':
+                            if self.opens_shop(self.current_npc):
                                 self.state = STATE_SHOP
                             self.current_npc = None
 
@@ -738,7 +770,7 @@ class PygameApp:
                     if self.showing_dialogue:
                         if event.key in (pygame.K_SPACE, pygame.K_RETURN):
                             self.showing_dialogue = False
-                            if self.current_npc and self.current_npc.data.get('name') == 'Merchant':
+                            if self.opens_shop(self.current_npc):
                                 self.state = STATE_SHOP
                             self.current_npc = None
                         elif event.key == pygame.K_ESCAPE:
@@ -762,7 +794,7 @@ class PygameApp:
                                     self.state = STATE_BATTLE
                                     self.randomize_enemy()
                                     self.gm.start_word_timer()
-                                elif o.type in ("npc", "shop_npc"):
+                                elif o.type in ("npc", "shop_npc", "shop"):
                                     self.showing_dialogue = True
                                     self.current_npc = o
                                     self.dialogue_timer = 180  
@@ -911,6 +943,8 @@ class PygameApp:
                         elif event.key == pygame.K_BACKSPACE: self.current_guess = self.current_guess[:-1]; self.gm.keystroke_count += 1
                         elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and len(self.current_guess) == 5:
                             self.gm.keystroke_count += 1; self.submit_guess()
+
+        self.sync_music()
 
     def submit_guess(self):
         guess = self.current_guess; self.current_guess = ""
@@ -1304,13 +1338,13 @@ class PygameApp:
         
         self.screen.blit(self.btn_font.render("SCREEN SHAKE", True, TEXT_SECONDARY), (210, 288))
         
-        sb = pygame.Rect(370, 280, 190, 35)
+        sb = pygame.Rect(410, 280, 190, 35)
         shover = sb.collidepoint(mx, my)
         pygame.draw.rect(self.screen, BG_DARK if not shover else (30, 41, 59), sb)
         pygame.draw.rect(self.screen, GOLD if self.shake_enabled else TEXT_DIM, sb, 1)
         s_txt = "ON" if self.shake_enabled else "OFF"
         t_col = GOLD_LIGHT if self.shake_enabled else TEXT_DIM
-        self.screen.blit(self.small_font.render(s_txt, True, t_col), (465 - self.small_font.size(s_txt)[0]//2, 288))
+        self.screen.blit(self.small_font.render(s_txt, True, t_col), (505 - self.small_font.size(s_txt)[0]//2, 288))
         
         if self.state == STATE_PAUSE:
             self.draw_styled_btn("RESUME", 250, 370, 300, 45, pygame.Rect(250, 370, 300, 45).collidepoint(mx, my))
@@ -1565,6 +1599,8 @@ class PygameApp:
                 
                 if o.type == "statue":
                     text = f"> [SPACE] Battle: {o.data.get('god', 'Statue')}" if is_sel else f"  Battle: {o.data.get('god', 'Statue')}"
+                elif self.opens_shop(o):
+                    text = f"> [SPACE] Shop: {o.data.get('name', 'Merchant')}" if is_sel else f"  Shop: {o.data.get('name', 'Merchant')}"
                 else:
                     text = f"> [SPACE] Talk: {o.data.get('name', 'NPC')}" if is_sel else f"  Talk: {o.data.get('name', 'NPC')}"
                     
@@ -1585,7 +1621,7 @@ class PygameApp:
             self.screen.blit(self.name_font.render(npc_name, True, GOLD), (dialogue_box.x + 20, dialogue_box.y + 15))
             self.screen.blit(self.small_font.render(npc_text, True, TEXT_PRIMARY), (dialogue_box.x + 20, dialogue_box.y + 50))
             
-            if npc_name == 'Merchant': action_txt = "[SPACE] to Shop   |   [ESC] Leave"
+            if self.opens_shop(self.current_npc): action_txt = "[SPACE] to Shop   |   [ESC] Leave"
             else: action_txt = "[SPACE] to Continue   |   [ESC] Leave"
             
             action_surf = self.tiny_font.render(action_txt, True, TEXT_DIM)
@@ -1690,29 +1726,56 @@ class PygameApp:
     def draw_upgrade(self):
         self.draw_overworld()
         overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 180)) 
+        overlay.fill((0, 0, 0, 90)) 
         self.screen.blit(overlay, (0, 0))
-        
-        box = pygame.Rect(150, 80, 500, 280)
-        s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
-        pygame.draw.rect(s, (15, 18, 30, 190), s.get_rect()) 
-        pygame.draw.rect(s, GOLD_DIM, s.get_rect(), 1) 
-        self.screen.blit(s, box.topleft)
-        
-        self.screen.blit(self.name_font.render("STATUE DESTROYED!", True, GOLD), (180, 100))
-        self.screen.blit(self.small_font.render("Blessing received! Choose an upgrade:", True, TEXT_PRIMARY), (180, 140))
-        
+
+        title_shadow = self.name_font.render("STATUE DESTROYED!", True, BLACK)
+        title_surf = self.name_font.render("STATUE DESTROYED!", True, GOLD)
+        subtitle_surf = self.small_font.render("Blessing received! Choose an upgrade:", True, TEXT_PRIMARY)
+        title_x = 400 - title_surf.get_width() // 2
+        subtitle_x = 400 - subtitle_surf.get_width() // 2
+
+        self.screen.blit(title_shadow, (title_x + 2, 72))
+        self.screen.blit(title_surf, (title_x, 70))
+        self.screen.blit(subtitle_surf, (subtitle_x, 112))
+
         mx, my = pygame.mouse.get_pos()
-        
-        self.upg_ares_rect = pygame.Rect(170, 180, 460, 55)
+
+        card_w, card_h = 500, 72
+        card_x = (self.screen_width - card_w) // 2
+        self.upg_ares_rect = pygame.Rect(card_x, 150, card_w, card_h)
         a_hover = self.upg_ares_rect.collidepoint(mx, my)
-        self.draw_styled_btn(f"[1] Power (Attack +{self.current_reward_atk})", 170, 180, 460, 55, a_hover)
-        self.screen.blit(self.tiny_font.render(f"Current Base ATK: {self.player.base_attack}", True, TEXT_DIM), (190, 215))
-        
-        self.upg_demeter_rect = pygame.Rect(170, 250, 460, 55)
+        atk_card = pygame.Surface((self.upg_ares_rect.width, self.upg_ares_rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(atk_card, (18, 22, 34, 110 if a_hover else 80), atk_card.get_rect(), border_radius=14)
+        pygame.draw.rect(atk_card, GOLD if a_hover else GOLD_DIM, atk_card.get_rect(), 2, border_radius=14)
+        if a_hover:
+            pygame.draw.rect(atk_card, (232, 200, 74, 35), (0, 0, self.upg_ares_rect.width, 8), border_top_left_radius=14, border_top_right_radius=14)
+        self.screen.blit(atk_card, self.upg_ares_rect.topleft)
+
+        atk_title = self.btn_font.render(f"[1] Power", True, GOLD_LIGHT if a_hover else TEXT_PRIMARY)
+        atk_desc = self.small_font.render(f"Attack +{self.current_reward_atk}", True, TEXT_PRIMARY)
+        self.screen.blit(atk_title, (400 - atk_title.get_width() // 2, self.upg_ares_rect.y + 10))
+        self.screen.blit(atk_desc, (400 - atk_desc.get_width() // 2, self.upg_ares_rect.y + 38))
+        atk_color = TEXT_PRIMARY if a_hover else TEXT_DIM
+        atk_surf = self.tiny_font.render(f"Current Base ATK: {self.player.base_attack}", True, atk_color)
+        self.screen.blit(atk_surf, (400 - atk_surf.get_width() // 2, self.upg_ares_rect.bottom + 6))
+
+        self.upg_demeter_rect = pygame.Rect(card_x, 248, card_w, card_h)
         d_hover = self.upg_demeter_rect.collidepoint(mx, my)
-        self.draw_styled_btn(f"[2] Vitality (Max HP +{self.current_reward_hp} & Heal)", 170, 250, 460, 55, d_hover)
-        self.screen.blit(self.tiny_font.render(f"Current Max HP: {self.player_max_hp}", True, TEXT_DIM), (190, 285))
+        hp_card = pygame.Surface((self.upg_demeter_rect.width, self.upg_demeter_rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(hp_card, (18, 22, 34, 110 if d_hover else 80), hp_card.get_rect(), border_radius=14)
+        pygame.draw.rect(hp_card, GOLD if d_hover else GOLD_DIM, hp_card.get_rect(), 2, border_radius=14)
+        if d_hover:
+            pygame.draw.rect(hp_card, (232, 200, 74, 35), (0, 0, self.upg_demeter_rect.width, 8), border_top_left_radius=14, border_top_right_radius=14)
+        self.screen.blit(hp_card, self.upg_demeter_rect.topleft)
+
+        hp_title = self.btn_font.render(f"[2] Vitality", True, GOLD_LIGHT if d_hover else TEXT_PRIMARY)
+        hp_desc = self.small_font.render(f"Max HP +{self.current_reward_hp} and Full Heal", True, TEXT_PRIMARY)
+        self.screen.blit(hp_title, (400 - hp_title.get_width() // 2, self.upg_demeter_rect.y + 10))
+        self.screen.blit(hp_desc, (400 - hp_desc.get_width() // 2, self.upg_demeter_rect.y + 38))
+        hp_color = TEXT_PRIMARY if d_hover else TEXT_DIM
+        hp_surf = self.tiny_font.render(f"Current Max HP: {self.player_max_hp}", True, hp_color)
+        self.screen.blit(hp_surf, (400 - hp_surf.get_width() // 2, self.upg_demeter_rect.bottom + 6))
 
     def draw_modern_hp_bar(self, surface, x, y, curr, max_hp, fill, name):
         panel_w = 300
@@ -1850,10 +1913,23 @@ class PygameApp:
             if c_char: battle_surf.blit(self.small_font.render(c_char, True, BLACK), (rx + 7, right_y + 5))
         
         if self.yellow_letters:
-            battle_surf.blit(self.small_font.render("PRESENT:", True, TEXT_PRIMARY), (right_x, right_y + 40))
+            label_surf = self.small_font.render("PRESENT:", True, TEXT_PRIMARY)
+            label_y = right_y + 40
+            battle_surf.blit(label_surf, (right_x, label_y))
+
+            present_start_x = right_x + label_surf.get_width() + 10
+            present_box = 20
+            present_gap = 5
+            present_right_limit = 780
+            boxes_per_row = max(1, (present_right_limit - present_start_x + present_gap) // (present_box + present_gap))
+
             for i, char in enumerate(sorted(list(self.yellow_letters))):
-                pygame.draw.rect(battle_surf, TEXT_PRIMARY, (right_x + 75 + i*25, right_y + 35, 20, 20)) 
-                battle_surf.blit(self.small_font.render(char, True, BLACK), (right_x + 75 + i*25 + 5, right_y + 38))
+                row = i // boxes_per_row
+                col = i % boxes_per_row
+                box_x = present_start_x + col * (present_box + present_gap)
+                box_y = label_y - 5 + row * (present_box + present_gap)
+                pygame.draw.rect(battle_surf, TEXT_PRIMARY, (box_x, box_y, present_box, present_box))
+                battle_surf.blit(self.small_font.render(char, True, BLACK), (box_x + 5, box_y + 3))
 
         if self.gm.game_over:
             msg = "VICTORY!" if self.enemy.current_hp <= 0 else "DEFEATED!"
@@ -1862,11 +1938,14 @@ class PygameApp:
             txt_surface = self.large_font.render(msg, True, msg_color)
             txt_rect = txt_surface.get_rect(center=(self.screen_width // 2, 280))
             
-            pygame.draw.rect(battle_surf, (0,0,0,150), (txt_rect.x-20, txt_rect.y-10, txt_rect.width+40, txt_rect.height+60))
+            txt_shadow = self.large_font.render(msg, True, BLACK)
+            battle_surf.blit(txt_shadow, (txt_rect.x + 3, txt_rect.y + 3))
             battle_surf.blit(txt_surface, txt_rect)
             
             sub_txt = self.small_font.render("Press SPACE to continue", True, WHITE)
             sub_rect = sub_txt.get_rect(center=(self.screen_width // 2, 330))
+            sub_shadow = self.small_font.render("Press SPACE to continue", True, BLACK)
+            battle_surf.blit(sub_shadow, (sub_rect.x + 2, sub_rect.y + 2))
             battle_surf.blit(sub_txt, sub_rect)
 
         self.screen.blit(battle_surf, (shake_x, shake_y))
@@ -1875,6 +1954,7 @@ class PygameApp:
         clock = pygame.time.Clock()
         while True:
             self.handle_events()
+            self.sync_music()
             if self.state == STATE_MAIN_MENU: self.draw_main_menu()
             elif self.state == STATE_SAVE_SLOTS: self.draw_save_slots()
             elif self.state == STATE_SELECTION: self.draw_selection()
