@@ -1,11 +1,15 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
 
 .venv/
 venv/
 ENV/
 env/
+
+.env
+.env.*
 
 .vscode/
 .idea/
@@ -13,8 +17,24 @@ env/
 dist/
 build/
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 .DS_Store
 Thumbs.db
+desktop.ini
 
 assets/images/desktop.ini
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+
+# Local runtime data
+data/session/
+data/slots/
