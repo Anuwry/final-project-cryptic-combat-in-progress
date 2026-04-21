@@ -4,7 +4,7 @@ Cryptic Combat
 
 # Project Description
 
-Cryptic Combat is a Python + Pygame word-combat roguelike where the player explores connected realms, fights myth-themed enemies through word guessing, manages items, and progresses through battle rewards and map traversal.
+Cryptic Combat is a Python + Pygame word-combat roguelike where the player explores connected realms, fights myth-themed enemies through word guessing, manages items, and progresses through battle rewards and map traversal
 
 # Installation / Running Guide
 
@@ -16,7 +16,7 @@ Cryptic Combat is a Python + Pygame word-combat roguelike where the player explo
 
 ## Windows
 
-1. Open PowerShell in the project root.
+1. Open PowerShell in the project root
 2. Create a virtual environment:
 
 ```powershell
@@ -41,15 +41,9 @@ pip install -r requirements.txt
 python main.py
 ```
 
-6. Optional: run the map editor:
-
-```powershell
-python map_editor.py
-```
-
 ## Mac
 
-1. Open Terminal in the project root.
+1. Open Terminal in the project root
 2. Create a virtual environment:
 
 ```bash
@@ -74,12 +68,6 @@ pip install -r requirements.txt
 python3 main.py
 ```
 
-6. Optional: run the map editor:
-
-```bash
-python3 map_editor.py
-```
-
 # Tutorial / Usage
 
 ## Basic Controls
@@ -93,18 +81,18 @@ python3 map_editor.py
 
 ## Battle Flow
 
-1. Approach a statue or enemy encounter in the overworld.
-2. Start a battle interaction.
-3. Type a 5-letter guess and press `ENTER`.
-4. Correct guesses deal damage and build combo.
-5. Wrong sequences can cause enemy counterattacks.
-6. Use potions and hint scrolls when needed.
+1. Approach a statue or enemy encounter in the overworld
+2. Start a battle interaction
+3. Type a 5-letter guess and press `ENTER`
+4. Correct guesses deal damage and build combo
+5. Wrong sequences can cause enemy counterattacks
+6. Use potions and hint scrolls when needed
 
 ## Inventory / Stats
 
-- Press `E` to open the inventory and statistics panel.
-- Click charts to expand them.
-- Click `Summarize` to open the summary dashboard overlay.
+- Press `E` to open the inventory and statistics panel
+- Click charts to expand them
+- Click `Summarize` to open the summary dashboard overlay
 
 # Game Features
 
@@ -158,21 +146,21 @@ cryptic_combat/
 
 ## Structure Notes
 
-- `main.py` is the entry point used to launch the game.
-- `src/app/game_app.py` assembles the main `PygameApp`.
-- `src/app/` contains gameplay and UI behavior split by responsibility.
-- `src/ui/` contains shared UI constants and rendering helpers.
-- `src/game_manager.py`, `src/mechanics.py`, and `src/entities.py` contain core gameplay systems.
-- `data/` contains words, saves, generated sessions, and gameplay logs.
+- `main.py` is the entry point used to launch the game
+- `src/app/game_app.py` assembles the main `PygameApp`
+- `src/app/` contains gameplay and UI behavior split by responsibility
+- `src/ui/` contains shared UI constants and rendering helpers
+- `src/game_manager.py`, `src/mechanics.py`, and `src/entities.py` contain core gameplay systems
+- `data/` contains words, saves, generated sessions, and gameplay logs
 
 # Known Bugs
 
-- No formal bug tracker is maintained in this repository yet.
-- During ongoing refactor work, minor UI alignment issues may still appear in some overlays or menus depending on state transitions.
+- During ongoing refactor work, minor UI alignment issues may still appear in some overlays or menus depending on state transitions
 
 # Unfinished Works
 
-- Codebase modularization is still in progress. `game_app.py` is already much smaller, but some logic can still be separated further into smaller state-specific modules if needed.
+- Codebase modularization is still in progress. `game_app.py` is already much smaller, but some logic can still be separated further into smaller state-specific modules if needed
+- DESCRIPTION.md, UML Class Diagram Unfinished
 
 # External Sources
 
