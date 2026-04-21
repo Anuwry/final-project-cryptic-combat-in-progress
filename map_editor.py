@@ -335,8 +335,7 @@ class MapEditor:
                         
                 elif pygame.mouse.get_pressed()[2] and event.pos[0] < SCREEN_WIDTH - 300:
                     if self.current_mode == "tile":
-                        self.handle_click(event.pos, 3)
-                        
+                        self.handle_click(event.pos, 3) 
         return True
 
     def run(self):
@@ -355,7 +354,6 @@ class MapEditor:
             self.draw_ui()
             pygame.display.flip()
             clock.tick(60)
-            
         if input("Save map before exiting? (y/n): ").lower() == 'y': self.save_map()
         pygame.quit()
 
