@@ -160,7 +160,7 @@ cryptic_combat/
 # Unfinished Works
 
 - Codebase modularization is still in progress. `game_app.py` is already much smaller, but some logic can still be separated further into smaller state-specific modules if needed
-- DESCRIPTION.md Unfinished
+- Youtube Video unfinished
 
 # External Sources
 
