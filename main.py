@@ -4,11 +4,26 @@ import os
 import math
 import random
 import json
+import time
 from src.config import DATA_DIR, RAW_DATA_DIR, WORDS_DATA_DIR, BASE_DIR
 from src.game_manager import GameManager
 from src.entities import Player, Enemy
 from src.mechanics import WordDictionary, TileBoard
 from src.map_loader import GameMap
+
+BG_DEEP = (10, 10, 15)
+BG_DARK = (15, 16, 24)
+BG_CARD = (15, 18, 30)
+GOLD = (201, 162, 39)
+GOLD_LIGHT = (232, 200, 74)
+GOLD_DIM = (138, 109, 27)
+ACCENT_RED = (139, 32, 32)
+ACCENT_RED_GLOW = (196, 60, 60)
+TEXT_PRIMARY = (212, 207, 192)
+TEXT_SECONDARY = (122, 117, 104)
+TEXT_DIM = (74, 70, 60)
+BORDER_SUBTLE = (40, 35, 20)
+BORDER_ACTIVE = (120, 100, 30)
 
 WHITE = (248, 250, 252)
 BLACK = (2, 6, 23)
@@ -26,12 +41,16 @@ AMBER_400 = (251, 191, 36)
 CYAN_400 = (34, 211, 238)
 CYAN_500 = (6, 182, 212)
 
+STATE_MAIN_MENU = -1
+STATE_SAVE_SLOTS = -2
 STATE_SELECTION = 0
 STATE_OVERWORLD = 1
 STATE_BATTLE = 2
 STATE_SHOP = 3
 STATE_UPGRADE = 4
 STATE_WARP = 5 
+STATE_PAUSE = 6
+STATE_SETTINGS = 7
 
 class SpriteSheet:
     def __init__(self, filename):
@@ -69,6 +88,7 @@ class PygameApp:
         pygame.display.set_caption("Cryptic Combat")
         
         self.large_font = pygame.font.Font(None, 64)
+        self.title_font = pygame.font.Font(None, 80) 
         self.combo_font = pygame.font.Font(None, 48)
         self.font = pygame.font.Font(None, 40)
         self.name_font = pygame.font.Font(None, 32)
@@ -76,38 +96,47 @@ class PygameApp:
         self.small_font = pygame.font.Font(None, 24)
         self.tiny_font = pygame.font.Font(None, 18) 
         
-        self.state = STATE_SELECTION
+        self.particles = []
+        for _ in range(50):
+            self.particles.append({
+                'x': random.uniform(0, 800), 'y': random.uniform(0, 600),
+                'vx': random.uniform(-0.2, 0.2), 'vy': random.uniform(-0.5, -0.1),
+                'size': random.uniform(1.5, 3.5), 'pulse': random.uniform(0, math.pi * 2)
+            })
+            
+        self.bgm_volume = 0.5
+        self.sfx_volume = 0.8
+        self.shake_enabled = True
+        pygame.mixer.music.set_volume(self.bgm_volume)
+        
+        self.saves = {"1": None, "2": None, "3": None}
+        self.current_save_slot = None
+        self.save_mode = 'new' 
+        self.load_saves_metadata()
+        
+        self.state = STATE_MAIN_MENU
+        
         self.gm = GameManager()
         self.dictionary = WordDictionary("normal")
         self.board = TileBoard()
         
-        self.gold = 50
-        self.base_atk = 15
-        self.player_max_hp = 100
-        self.player = Player(hp=self.player_max_hp, base_attack=self.base_atk)
-        
-        self.show_inventory = False
+        self.item_icons = {}
         self.inventory = [None] * 20
+        self.show_inventory = False
         self.dragged_item = None
         self.dragged_from_idx = -1
-        self.item_icons = {}
         
-        self.realm_x = 0
-        self.realm_y = 0
-        self.current_level = 1
-        
-        self.current_reward_atk = 5
-        self.current_reward_hp = 20
+        self.setup_assets()
+        self.setup_selection()
+        self.reset_player_data()
         
         self.nearby_interactables = []
         self.interact_index = 0
-        
         self.enemy_hit_count = 0  
-        self.last_normal_realm = (0, 0)
         self.pending_warp_idx = -1
         self.current_bgm = None
-        self.defeated_bosses = {} 
         self.current_battle_bg = None 
+        self.defeated_bosses = {} 
         
         db_path = os.path.join(BASE_DIR, "data/defeated_bosses.json")
         if os.path.exists(db_path):
@@ -132,8 +161,7 @@ class PygameApp:
                                     lvl = abs(rx) + abs(ry) + 1
                                     self.generated_boss_levels.add(lvl)
                                     break
-                    except:
-                        pass
+                    except: pass
         
         self.game_map = GameMap(self.realm_x, self.realm_y, False)
         self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
@@ -158,13 +186,95 @@ class PygameApp:
         self.dialogue_timer = 0
         self.current_statue = None
         
-        self.setup_assets()
-        self.setup_selection()
         self.setup_overworld()
+
+    def load_saves_metadata(self):
+        path = os.path.join(BASE_DIR, "data", "saves.json")
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    self.saves = json.load(f)
+            except:
+                self.saves = {"1": None, "2": None, "3": None}
+
+    def save_game_data(self):
+        if not self.current_save_slot: return
+        self.saves[str(self.current_save_slot)] = {
+            "hp": self.player.hp,
+            "max_hp": self.player_max_hp,
+            "base_atk": self.base_atk,
+            "gold": self.gold,
+            "inventory": self.inventory,
+            "realm_x": self.realm_x,
+            "realm_y": self.realm_y,
+            "pos": self.map_player_pos,
+            "defeated_bosses": self.defeated_bosses,
+            "selections": self.selections,
+            "level": self.current_level,
+            "generated_bosses": list(self.generated_boss_levels) if hasattr(self, 'generated_boss_levels') else []
+        }
+        path = os.path.join(BASE_DIR, "data", "saves.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            json.dump(self.saves, f)
+
+    def load_game_data(self, slot):
+        data = self.saves[str(slot)]
+        self.current_save_slot = slot
+        self.player_max_hp = data.get("max_hp", 100)
+        self.base_atk = data.get("base_atk", 15)
+        self.player = Player(hp=data.get("hp", 100), base_attack=self.base_atk)
+        self.gold = data.get("gold", 50)
+        self.inventory = data.get("inventory", [None]*20)
+        self.realm_x = data.get("realm_x", 0)
+        self.realm_y = data.get("realm_y", 0)
+        self.map_player_pos = data.get("pos", [15*64, 15*64])
+        self.defeated_bosses = data.get("defeated_bosses", {})
+        self.selections = data.get("selections", {k: 0 for k in self.tabs})
+        self.current_level = data.get("level", 1)
+        self.generated_boss_levels = set(data.get("generated_bosses", []))
         
+        self.update_player_visuals()
+        self.game_map = GameMap(self.realm_x, self.realm_y)
+        self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
+        self.total_statues = len(self.game_map.get_statues())
+        
+        if self.game_map.is_boss_realm and self.game_map.god_theme:
+            self.play_god_bgm(self.game_map.god_theme)
+        else:
+            self.stop_music()
+            
+        self.setup_overworld()
+        self.state = STATE_OVERWORLD
+
+    def reset_player_data(self):
+        self.gold = 50
+        self.base_atk = 15
+        self.player_max_hp = 100
+        self.player = Player(hp=self.player_max_hp, base_attack=self.base_atk)
+        self.show_inventory = False
+        self.inventory = [None] * 20
         self.add_item('compass', 'Warp Scroll', 'Teleports you safely', 1)
         self.add_item('potion', 'Health Potion', 'Heals 50 HP', 2)
         self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 3) 
+        self.realm_x, self.realm_y = 0, 0
+        self.current_level = 1
+        self.last_normal_realm = (0, 0)
+        self.defeated_bosses = {}
+        self.selections = {k: 0 for k in self.tabs}
+        self.generated_boss_levels = set()
+        self.update_player_visuals()
+
+    def start_new_game(self, slot):
+        self.current_save_slot = slot
+        self.reset_player_data()
+        self.game_map = GameMap(0, 0)
+        self.map_player_pos = list(self.game_map.spawn_point)
+        self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
+        self.total_statues = len(self.game_map.get_statues())
+        self.stop_music()
+        self.setup_overworld()
+        self.state = STATE_SELECTION 
 
     def play_god_bgm(self, god_name):
         base_path = os.path.join(BASE_DIR, "assets", "sounds", f"{god_name.lower()}_bgm")
@@ -185,7 +295,6 @@ class PygameApp:
             if not loaded:
                 pygame.mixer.music.stop()
                 self.current_bgm = None
-                print(f"Missing BGM for: {god_name}")
 
     def stop_music(self):
         pygame.mixer.music.stop()
@@ -195,8 +304,7 @@ class PygameApp:
         if os.path.exists(path): 
             try:
                 return pygame.transform.scale(pygame.image.load(path).convert_alpha(), size)
-            except:
-                pass
+            except: pass
         surf = pygame.Surface(size)
         surf.fill(fallback_color)
         return surf
@@ -210,23 +318,23 @@ class PygameApp:
         self.sprite_sheet = SpriteSheet(sprite_path)
         
         compass_img = pygame.Surface((32, 32), pygame.SRCALPHA)
-        pygame.draw.circle(compass_img, AMBER_500, (16, 16), 12)
-        pygame.draw.circle(compass_img, BLACK, (16, 16), 12, 2)
-        pygame.draw.polygon(compass_img, RED_500, [(16, 6), (12, 16), (20, 16)])
-        pygame.draw.polygon(compass_img, WHITE, [(16, 26), (12, 16), (20, 16)])
+        pygame.draw.circle(compass_img, GOLD, (16, 16), 12)
+        pygame.draw.circle(compass_img, BG_DARK, (16, 16), 12, 2)
+        pygame.draw.polygon(compass_img, ACCENT_RED, [(16, 6), (12, 16), (20, 16)])
+        pygame.draw.polygon(compass_img, TEXT_PRIMARY, [(16, 26), (12, 16), (20, 16)])
         self.item_icons['compass'] = compass_img
         
         potion_img = pygame.Surface((32, 32), pygame.SRCALPHA)
-        pygame.draw.rect(potion_img, RED_500, (10, 14, 12, 14)) 
+        pygame.draw.rect(potion_img, ACCENT_RED_GLOW, (10, 14, 12, 14)) 
         pygame.draw.rect(potion_img, WHITE, (12, 6, 8, 8))
-        pygame.draw.rect(potion_img, BLACK, (10, 14, 12, 14), 2) 
-        pygame.draw.rect(potion_img, BLACK, (12, 6, 8, 8), 2)
+        pygame.draw.rect(potion_img, BG_DARK, (10, 14, 12, 14), 2) 
+        pygame.draw.rect(potion_img, BG_DARK, (12, 6, 8, 8), 2)
         self.item_icons['potion'] = potion_img
         
         scroll_img = pygame.Surface((32, 32), pygame.SRCALPHA)
-        pygame.draw.rect(scroll_img, (230, 210, 170), (8, 8, 16, 20)) 
-        pygame.draw.rect(scroll_img, CYAN_500, (6, 12, 20, 5))
-        pygame.draw.rect(scroll_img, BLACK, (8, 8, 16, 20), 2) 
+        pygame.draw.rect(scroll_img, TEXT_PRIMARY, (8, 8, 16, 20)) 
+        pygame.draw.rect(scroll_img, GOLD_DIM, (6, 12, 20, 5))
+        pygame.draw.rect(scroll_img, BG_DARK, (8, 8, 16, 20), 2) 
         self.item_icons['scroll'] = scroll_img
 
     def add_item(self, item_id, name, desc, qty=1):
@@ -251,7 +359,6 @@ class PygameApp:
     def setup_selection(self):
         player_bases = [(1, 0), (1, 1), (1, 2)]
         self.enemy_bases = player_bases
-        
         self.options = {
             'base': player_bases, 'pants': [None] + self.filter_empty(self.generate_box(2, 0, 4, 9)),
             'armor': [None] + self.filter_empty(self.generate_box(5, 0, 17, 9)),
@@ -276,7 +383,6 @@ class PygameApp:
         self.player_battle_img = self.sprite_sheet.get_equipped_image_by_grid(layers, 10)
 
     def setup_overworld(self):
-        self.map_player_pos = list(self.game_map.spawn_point)
         self.map_player_speed = 5
         self.facing_left_overworld = False
         self.is_moving = False
@@ -285,6 +391,7 @@ class PygameApp:
         self.player_battle_pos = (80, 230)
 
     def trigger_shake(self, intensity, duration):
+        if not self.shake_enabled: return
         self.shake_amount = intensity
         self.shake_timer = duration
 
@@ -337,6 +444,8 @@ class PygameApp:
         self.facing_left_overworld = False
         self.game_map.camera_offset = [0, 0]
         self.game_map.target_camera_offset = [0, 0]
+        
+        self.save_game_data()
 
     def execute_warp(self, tx, ty):
         item = self.inventory[self.pending_warp_idx]
@@ -363,8 +472,6 @@ class PygameApp:
                 img = pygame.image.load(bg_path).convert()
                 self.current_battle_bg = pygame.transform.scale(img, (800, 600))
             except: pass
-        else:
-            print(f"Missing battle background for: {bg_name}")
         
         if tier == 'Boss':
             max_hp = 300 + (self.current_level * 50)
@@ -421,29 +528,29 @@ class PygameApp:
                 self.pending_warp_idx = hotbar_idx
                 self.state = STATE_WARP
             else:
-                self.spawn_floating_text("Can't use now", px, py, RED_500, 'tiny')
+                self.spawn_floating_text("Can't use now", px, py, ACCENT_RED_GLOW, 'tiny')
                 
         elif item['id'] == 'potion':
             if self.player.hp < self.player_max_hp:
                 heal_amount = 50
                 self.player.hp = min(self.player_max_hp, self.player.hp + heal_amount)
-                self.spawn_floating_text(f"+{heal_amount} HP", px, py, EMERALD_400, 'tiny')
+                self.spawn_floating_text(f"+{heal_amount} HP", px, py, EMERALD_500, 'tiny')
                 item['qty'] -= 1
                 if item['qty'] <= 0: self.inventory[hotbar_idx] = None
             else:
-                self.spawn_floating_text("HP is Full", px, py, WHITE, 'tiny')
+                self.spawn_floating_text("HP is Full", px, py, TEXT_PRIMARY, 'tiny')
                 
         elif item['id'] == 'scroll':
             if self.state == STATE_BATTLE and not self.gm.game_over:
                 for idx, c in enumerate(self.target_word):
                     if self.green_letters[idx] is None:
                         self.green_letters[idx] = c
-                        self.spawn_floating_text("Hint Used!", px, py, CYAN_400, 'tiny')
+                        self.spawn_floating_text("Hint Used!", px, py, GOLD_LIGHT, 'tiny')
                         item['qty'] -= 1
                         if item['qty'] <= 0: self.inventory[hotbar_idx] = None
                         break
             else:
-                self.spawn_floating_text("Can't use now", px, py, RED_500, 'tiny')
+                self.spawn_floating_text("Can't use now", px, py, ACCENT_RED_GLOW, 'tiny')
 
     def get_hovered_slot(self, pos):
         mx, my = pos
@@ -451,10 +558,8 @@ class PygameApp:
         padding = 6
         start_x = (800 - (5 * slot_size + 4 * padding)) // 2
         hotbar_start_y = 540
-        
         for i in range(5):
             if pygame.Rect(start_x + i * (slot_size + padding), hotbar_start_y, slot_size, slot_size).collidepoint(mx, my): return i
-            
         if self.show_inventory:
             inv_start_y = hotbar_start_y - (3 * (slot_size + padding)) - 10
             for i in range(15):
@@ -477,17 +582,87 @@ class PygameApp:
         for event in pygame.event.get():
             if event.type == pygame.QUIT: 
                 if hasattr(self, 'game_map'): self.game_map.save_map()
-                self.gm.export_data_to_csv(); pygame.quit(); sys.exit()
-                
-            if self.state in [STATE_OVERWORLD]: 
+                self.save_game_data()
+                pygame.quit(); sys.exit()
+            
+            if self.state == STATE_MAIN_MENU:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    if pygame.Rect(250, 260, 300, 55).collidepoint(mx, my):
+                        self.save_mode = 'new'
+                        self.state = STATE_SAVE_SLOTS
+                    elif pygame.Rect(250, 330, 300, 55).collidepoint(mx, my):
+                        self.save_mode = 'load'
+                        self.state = STATE_SAVE_SLOTS
+                    elif pygame.Rect(250, 400, 300, 55).collidepoint(mx, my):
+                        self.state = STATE_SETTINGS
+                    elif pygame.Rect(250, 470, 300, 55).collidepoint(mx, my):
+                        pygame.quit(); sys.exit()
+                        
+            elif self.state == STATE_SAVE_SLOTS:
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    self.state = STATE_MAIN_MENU
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    if pygame.Rect(20, 20, 100, 40).collidepoint(mx, my):
+                        self.state = STATE_MAIN_MENU
+                        
+                    for i in range(1, 4):
+                        slot_rect = pygame.Rect(150, 100 + (i-1)*130, 450, 110)
+                        del_rect = pygame.Rect(620, 100 + (i-1)*130 + 30, 50, 50)
+                        
+                        if del_rect.collidepoint(mx, my) and self.saves[str(i)]:
+                            self.saves[str(i)] = None
+                            path = os.path.join(BASE_DIR, "data", "saves.json")
+                            with open(path, 'w') as f: json.dump(self.saves, f)
+                            
+                        elif slot_rect.collidepoint(mx, my):
+                            if self.save_mode == 'load' and self.saves[str(i)]: 
+                                self.load_game_data(i)
+                            elif self.save_mode == 'new': 
+                                self.start_new_game(i)
+
+            elif self.state in [STATE_SETTINGS, STATE_PAUSE]:
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    self.state = STATE_OVERWORLD if self.state == STATE_PAUSE else STATE_MAIN_MENU
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    
+                    if pygame.Rect(370, 200, 35, 35).collidepoint(mx, my):
+                        self.bgm_volume = max(0.0, self.bgm_volume - 0.1)
+                        pygame.mixer.music.set_volume(self.bgm_volume)
+                    elif pygame.Rect(525, 200, 35, 35).collidepoint(mx, my):
+                        self.bgm_volume = min(1.0, self.bgm_volume + 0.1)
+                        pygame.mixer.music.set_volume(self.bgm_volume)
+                        
+                    if pygame.Rect(370, 280, 190, 35).collidepoint(mx, my):
+                        self.shake_enabled = not self.shake_enabled
+                        
+                    if self.state == STATE_PAUSE:
+                        if pygame.Rect(250, 370, 300, 45).collidepoint(mx, my):
+                            self.state = STATE_OVERWORLD
+                        elif pygame.Rect(250, 430, 300, 45).collidepoint(mx, my):
+                            self.save_game_data()
+                            self.stop_music()
+                            self.state = STATE_MAIN_MENU
+                    else:
+                        if pygame.Rect(250, 430, 300, 45).collidepoint(mx, my):
+                            self.state = STATE_MAIN_MENU
+
+            elif self.state == STATE_OVERWORLD: 
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    
+                    if pygame.Rect(740, 20, 40, 40).collidepoint(mx, my):
+                        self.state = STATE_PAUSE
+                        return
+                        
                     slot_idx = self.get_hovered_slot(event.pos)
                     if slot_idx is not None and self.inventory[slot_idx]:
                         self.dragged_item = self.inventory[slot_idx]
                         self.dragged_from_idx = slot_idx
                         self.inventory[slot_idx] = None
                     elif self.showing_dialogue:
-                        mx, my = event.pos
                         dialogue_rect = pygame.Rect(100, 400, 600, 120)
                         if dialogue_rect.collidepoint(mx, my):
                             self.showing_dialogue = False
@@ -506,61 +681,8 @@ class PygameApp:
                             self.inventory[self.dragged_from_idx] = self.dragged_item
                         self.dragged_item = None
                         self.dragged_from_idx = -1
-
-            elif self.state == STATE_WARP:
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        self.state = STATE_OVERWORLD
-                    elif event.key == pygame.K_1:
-                        self.execute_warp(0, 0)
-                    elif event.key == pygame.K_2:
-                        self.execute_warp(self.last_normal_realm[0], self.last_normal_realm[1])
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    mx, my = event.pos
-                    if pygame.Rect(170, 240, 460, 50).collidepoint(mx, my):
-                        self.execute_warp(0, 0)
-                    elif pygame.Rect(170, 300, 460, 50).collidepoint(mx, my):
-                        self.execute_warp(self.last_normal_realm[0], self.last_normal_realm[1])
-
-            elif self.state == STATE_SHOP:
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    mx, my = event.pos
-                    if hasattr(self, 'shop_potion_rect') and self.shop_potion_rect.collidepoint(mx, my):
-                        if self.gold >= 50 and self.add_item('potion', 'Health Potion', 'Heals 50 HP', 1):
-                            self.gold -= 50
-                    elif hasattr(self, 'shop_scroll_rect') and self.shop_scroll_rect.collidepoint(mx, my):
-                        if self.gold >= 50 and self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 1):
-                            self.gold -= 50
-                    elif hasattr(self, 'shop_exit_rect') and self.shop_exit_rect.collidepoint(mx, my):
-                        self.state = STATE_OVERWORLD
-
-            elif self.state == STATE_UPGRADE:
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    mx, my = event.pos
-                    if hasattr(self, 'upg_ares_rect') and self.upg_ares_rect.collidepoint(mx, my):
-                        self.base_atk += getattr(self, 'current_reward_atk', 5)
-                        self.player.base_attack = self.base_atk
-                        self.state = STATE_OVERWORLD
-                    elif hasattr(self, 'upg_demeter_rect') and self.upg_demeter_rect.collidepoint(mx, my):
-                        self.player_max_hp += getattr(self, 'current_reward_hp', 20)
-                        self.player.hp = self.player_max_hp
-                        self.state = STATE_OVERWORLD
-            
-            if self.state == STATE_SELECTION:
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    if self.start_btn_rect.collidepoint(event.pos): self.state = STATE_OVERWORLD; return
-                    for btn in self.active_buttons:
-                        if btn['rect'].collidepoint(event.pos):
-                            if btn['type'] == 'tab': self.current_tab = btn['tab']
-                            elif btn['type'] == 'item': self.selections[self.current_tab] = btn['idx']; self.update_player_visuals()
-                            elif btn['type'] == 'prev': self.pages[self.current_tab] = max(0, self.pages[self.current_tab] - 1)
-                            elif btn['type'] == 'next': 
-                                max_p = math.ceil(len(self.options[self.current_tab]) / self.items_per_page) - 1
-                                self.pages[self.current_tab] = min(max_p, self.pages[self.current_tab] + 1)
-                            break 
-                            
-            elif self.state == STATE_OVERWORLD:
-                if event.type == pygame.KEYDOWN:
+                        
+                elif event.type == pygame.KEYDOWN:
                     if self.showing_dialogue:
                         if event.key in (pygame.K_SPACE, pygame.K_RETURN):
                             self.showing_dialogue = False
@@ -571,13 +693,15 @@ class PygameApp:
                             self.showing_dialogue = False
                             self.current_npc = None
                     else:
+                        if event.key == pygame.K_ESCAPE:
+                            self.state = STATE_PAUSE
+                            return
+                            
                         menu_active = hasattr(self, 'nearby_interactables') and len(self.nearby_interactables) > 1
-                        
                         if menu_active and event.key == pygame.K_UP:
                             self.interact_index = (self.interact_index - 1) % len(self.nearby_interactables)
                         elif menu_active and event.key == pygame.K_DOWN:
                             self.interact_index = (self.interact_index + 1) % len(self.nearby_interactables)
-                        
                         elif event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_f):
                             if hasattr(self, 'nearby_interactables') and self.nearby_interactables:
                                 o = self.nearby_interactables[self.interact_index]
@@ -590,33 +714,76 @@ class PygameApp:
                                     self.showing_dialogue = True
                                     self.current_npc = o
                                     self.dialogue_timer = 180  
-                                    
                         elif event.key == pygame.K_e:
                             self.show_inventory = not self.show_inventory
                         elif pygame.K_1 <= event.key <= pygame.K_5:
                             self.use_item(event.key - pygame.K_1)
-                            
+
+            elif self.state == STATE_WARP:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE: self.state = STATE_OVERWORLD
+                    elif event.key == pygame.K_1: self.execute_warp(0, 0)
+                    elif event.key == pygame.K_2: self.execute_warp(self.last_normal_realm[0], self.last_normal_realm[1])
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    if pygame.Rect(180, 230, 440, 45).collidepoint(mx, my): self.execute_warp(0, 0)
+                    elif pygame.Rect(180, 290, 440, 45).collidepoint(mx, my): self.execute_warp(self.last_normal_realm[0], self.last_normal_realm[1])
+
             elif self.state == STATE_SHOP:
-                if event.type == pygame.KEYDOWN:
-                    if event.key in (pygame.K_ESCAPE, pygame.K_SPACE, pygame.K_RETURN):
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    if hasattr(self, 'shop_potion_rect') and self.shop_potion_rect.collidepoint(mx, my):
+                        if self.gold >= 50 and self.add_item('potion', 'Health Potion', 'Heals 50 HP', 1): self.gold -= 50
+                    elif hasattr(self, 'shop_scroll_rect') and self.shop_scroll_rect.collidepoint(mx, my):
+                        if self.gold >= 50 and self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 1): self.gold -= 50
+                    elif hasattr(self, 'shop_exit_rect') and self.shop_exit_rect.collidepoint(mx, my):
                         self.state = STATE_OVERWORLD
+                elif event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_ESCAPE, pygame.K_SPACE, pygame.K_RETURN): self.state = STATE_OVERWORLD
                     elif event.key == pygame.K_1:
-                        if self.gold >= 50 and self.add_item('potion', 'Health Potion', 'Heals 50 HP', 1):
-                            self.gold -= 50
+                        if self.gold >= 50 and self.add_item('potion', 'Health Potion', 'Heals 50 HP', 1): self.gold -= 50
                     elif event.key == pygame.K_2:
-                        if self.gold >= 50 and self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 1):
-                            self.gold -= 50
-            
+                        if self.gold >= 50 and self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 1): self.gold -= 50
+
             elif self.state == STATE_UPGRADE:
-                if event.type == pygame.KEYDOWN:
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    if hasattr(self, 'upg_ares_rect') and self.upg_ares_rect.collidepoint(mx, my):
+                        self.base_atk += getattr(self, 'current_reward_atk', 5)
+                        self.player.base_attack = self.base_atk
+                        self.save_game_data()
+                        self.state = STATE_OVERWORLD
+                    elif hasattr(self, 'upg_demeter_rect') and self.upg_demeter_rect.collidepoint(mx, my):
+                        self.player_max_hp += getattr(self, 'current_reward_hp', 20)
+                        self.player.hp = self.player_max_hp
+                        self.save_game_data()
+                        self.state = STATE_OVERWORLD
+                elif event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_1:
                         self.base_atk += getattr(self, 'current_reward_atk', 5)
                         self.player.base_attack = self.base_atk
+                        self.save_game_data()
                         self.state = STATE_OVERWORLD
                     elif event.key == pygame.K_2:
                         self.player_max_hp += getattr(self, 'current_reward_hp', 20)
                         self.player.hp = self.player_max_hp
+                        self.save_game_data()
                         self.state = STATE_OVERWORLD
+            
+            elif self.state == STATE_SELECTION:
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self.start_btn_rect.collidepoint(event.pos): 
+                        self.save_game_data()
+                        self.state = STATE_OVERWORLD; return
+                    for btn in self.active_buttons:
+                        if btn['rect'].collidepoint(event.pos):
+                            if btn['type'] == 'tab': self.current_tab = btn['tab']
+                            elif btn['type'] == 'item': self.selections[self.current_tab] = btn['idx']; self.update_player_visuals()
+                            elif btn['type'] == 'prev': self.pages[self.current_tab] = max(0, self.pages[self.current_tab] - 1)
+                            elif btn['type'] == 'next': 
+                                max_p = math.ceil(len(self.options[self.current_tab]) / self.items_per_page) - 1
+                                self.pages[self.current_tab] = min(max_p, self.pages[self.current_tab] + 1)
+                            break 
                             
             elif self.state == STATE_BATTLE:
                 if event.type == pygame.KEYDOWN:
@@ -635,14 +802,8 @@ class PygameApp:
                                     self.current_reward_hp = random.randint(40, 60)
                                     self.add_item('compass', 'Warp Scroll', 'Teleports you safely', 1)
                                     self.spawn_floating_text("+1 Warp Scroll", 400, 200, CYAN_400)
-                                    
                                     k = f"{self.realm_x}_{self.realm_y}"
                                     self.defeated_bosses[k] = self.game_map.god_theme
-                                    db_path = os.path.join(BASE_DIR, "data/defeated_bosses.json")
-                                    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-                                    with open(db_path, 'w') as f:
-                                        json.dump(self.defeated_bosses, f)
-                                        
                                 elif tier == 'Apostle':
                                     self.current_reward_atk = random.randint(4, 8)
                                     self.current_reward_hp = random.randint(20, 35)
@@ -653,6 +814,7 @@ class PygameApp:
                                     self.current_reward_atk = random.randint(1, 3)
                                     self.current_reward_hp = random.randint(5, 10)
                                     
+                                self.save_game_data()
                                 self.state = STATE_UPGRADE 
                             else:
                                 self.player.hp = self.player_max_hp
@@ -667,13 +829,13 @@ class PygameApp:
                             if potion_idx is not None:
                                 if self.player.hp < self.player_max_hp:
                                     self.player.hp = min(self.player_max_hp, self.player.hp + 50)
-                                    self.spawn_floating_text("+50 HP", px, py, EMERALD_400, 'small')
+                                    self.spawn_floating_text("+50 HP", px, py, EMERALD_500, 'small')
                                     self.inventory[potion_idx]['qty'] -= 1
                                     if self.inventory[potion_idx]['qty'] <= 0: self.inventory[potion_idx] = None
                                 else:
-                                    self.spawn_floating_text("HP is Full", px, py, WHITE, 'small')
+                                    self.spawn_floating_text("HP is Full", px, py, TEXT_PRIMARY, 'small')
                             else:
-                                self.spawn_floating_text("No Potions", px, py, RED_500, 'small')
+                                self.spawn_floating_text("No Potions", px, py, ACCENT_RED_GLOW, 'small')
                         
                         elif event.key == pygame.K_2:
                             px = self.player_battle_pos[0] + 80 + random.randint(-20, 20)
@@ -683,12 +845,12 @@ class PygameApp:
                                 for idx, c in enumerate(self.target_word):
                                     if self.green_letters[idx] is None:
                                         self.green_letters[idx] = c
-                                        self.spawn_floating_text("Hint Used!", px, py, CYAN_400, 'small')
+                                        self.spawn_floating_text("Hint Used!", px, py, GOLD, 'small')
                                         self.inventory[scroll_idx]['qty'] -= 1
                                         if self.inventory[scroll_idx]['qty'] <= 0: self.inventory[scroll_idx] = None
                                         break
                             else:
-                                self.spawn_floating_text("No Scrolls", px, py, RED_500, 'small')
+                                self.spawn_floating_text("No Scrolls", px, py, ACCENT_RED_GLOW, 'small')
                                 
                         elif event.unicode.isascii() and event.unicode.isalpha() and len(self.current_guess) < 5:
                             self.current_guess += event.unicode.upper(); self.gm.keystroke_count += 1
@@ -721,7 +883,7 @@ class PygameApp:
             
             px = self.enemy_battle_pos[0] + 80 + random.randint(-20, 20)
             py = self.enemy_battle_pos[1] - 20 + random.randint(-15, 15)
-            self.spawn_floating_text(f"-{damage}", px, py, RED_500)
+            self.spawn_floating_text(f"-{damage}", px, py, ACCENT_RED_GLOW)
             
             if self.player.combo_count > 1: self.crit_timer = 60
             
@@ -747,8 +909,8 @@ class PygameApp:
                 py = self.player_battle_pos[1] - 20 + random.randint(-15, 15)
                 
                 if is_crit:
-                    self.spawn_floating_text("CRITICAL HIT!", px, py - 20, RED_500, 'small')
-                self.spawn_floating_text(f"-{final_damage}", px, py, RED_500)
+                    self.spawn_floating_text("CRITICAL HIT!", px, py - 20, ACCENT_RED_GLOW, 'small')
+                self.spawn_floating_text(f"-{final_damage}", px, py, ACCENT_RED_GLOW)
                 
                 if self.player.hp <= 0: self.gm.game_over = True
                 else: self.reset_for_next_word()
@@ -761,6 +923,162 @@ class PygameApp:
         self.yellow_letters = set()
         self.green_letters = [None] * 5 
         self.gm.start_word_timer()
+
+    def draw_particles(self):
+        for p in self.particles:
+            p['x'] += p['vx']
+            p['y'] += p['vy']
+            p['pulse'] += 0.02
+            if p['y'] < -10: 
+                p['y'] = 610
+                p['x'] = random.uniform(0, 800)
+            if p['x'] < -10: p['x'] = 810
+            if p['x'] > 810: p['x'] = -10
+            
+            alpha = int(100 + 100 * math.sin(p['pulse']))
+            alpha = max(0, min(255, alpha))
+            
+            s = pygame.Surface((int(p['size']*4), int(p['size']*4)), pygame.SRCALPHA)
+            pygame.draw.circle(s, (201, 162, 39, int(alpha*0.3)), (int(p['size']*2), int(p['size']*2)), int(p['size']*2))
+            pygame.draw.circle(s, (232, 200, 74, alpha), (int(p['size']*2), int(p['size']*2)), max(1, int(p['size']*0.5)))
+            self.screen.blit(s, (int(p['x']), int(p['y'])))
+
+    def draw_styled_btn(self, text, x, y, w, h, is_hover, is_danger=False):
+        vx = x + 6 if is_hover else x
+        rect = pygame.Rect(x, y, w, h)
+        
+        bg_col = (40, 10, 10, 230) if is_danger and is_hover else ((20, 5, 5, 200) if is_danger else ((25, 28, 42, 230) if is_hover else (12, 14, 24, 180)))
+        
+        s = pygame.Surface((w, h), pygame.SRCALPHA)
+        pygame.draw.rect(s, bg_col, s.get_rect())
+        
+        accent = ACCENT_RED_GLOW if is_danger else GOLD
+        border = GOLD_DIM if is_hover else BORDER_SUBTLE
+        
+        pygame.draw.rect(s, border, s.get_rect(), 1)
+        if is_hover:
+            pygame.draw.rect(s, accent, (0, 0, 4, h))
+            
+        t_color = GOLD_LIGHT if is_hover else TEXT_SECONDARY
+        if is_danger: t_color = ACCENT_RED_GLOW
+        
+        t_surf = self.btn_font.render(text, True, t_color)
+        s.blit(t_surf, (w//2 - t_surf.get_width()//2, h//2 - t_surf.get_height()//2))
+        
+        self.screen.blit(s, (vx, y))
+        return rect
+
+    def draw_main_menu(self):
+        self.screen.fill(BG_DEEP)
+        self.draw_particles()
+        
+        pulse = abs(math.sin(time.time() * 2))
+        title = self.title_font.render("CRYPTIC COMBAT", True, GOLD)
+        glow = self.title_font.render("CRYPTIC COMBAT", True, (int(201*0.5*pulse), int(162*0.5*pulse), int(39*0.5*pulse)))
+        tx = self.screen_width//2 - title.get_width()//2
+        self.screen.blit(glow, (tx, 100))
+        self.screen.blit(title, (tx, 100))
+        
+        sub = self.small_font.render("I N T O   T H E   U N K N O W N", True, TEXT_SECONDARY)
+        self.screen.blit(sub, (self.screen_width//2 - sub.get_width()//2, 170))
+        
+        mx, my = pygame.mouse.get_pos()
+        btns = [("NEW GAME", 260), ("LOAD GAME", 330), ("SETTINGS", 400), ("EXIT", 470)]
+        for text, y in btns:
+            is_hover = pygame.Rect(250, y, 300, 55).collidepoint(mx, my)
+            self.draw_styled_btn(text, 250, y, 300, 55, is_hover, text=="EXIT")
+
+    def draw_save_slots(self):
+        self.screen.fill(BG_DEEP)
+        self.draw_particles()
+        
+        title_txt = "SELECT SAVE SLOT" if self.save_mode == 'new' else "LOAD GAME"
+        self.screen.blit(self.name_font.render(title_txt, True, GOLD), (280, 40))
+        
+        mx, my = pygame.mouse.get_pos()
+        b_rect = pygame.Rect(20, 20, 100, 40)
+        b_hover = b_rect.collidepoint(mx, my)
+        pygame.draw.rect(self.screen, (255,255,255,20) if b_hover else (0,0,0,0), b_rect)
+        self.screen.blit(self.btn_font.render("< BACK", True, TEXT_PRIMARY), (30, 30))
+        
+        for i in range(1, 4):
+            data = self.saves[str(i)]
+            y = 100 + (i-1)*130
+            rect = pygame.Rect(150, y, 450, 110)
+            del_rect = pygame.Rect(620, y+30, 50, 50)
+            
+            hover = rect.collidepoint(mx, my)
+            slot_surf = pygame.Surface((450, 110), pygame.SRCALPHA)
+            bg_col = (22, 25, 38, 240) if hover else (15, 18, 30, 200)
+            pygame.draw.rect(slot_surf, bg_col, slot_surf.get_rect())
+            pygame.draw.rect(slot_surf, GOLD if hover else BORDER_SUBTLE, slot_surf.get_rect(), 2)
+            self.screen.blit(slot_surf, (150, y))
+            
+            if data:
+                self.screen.blit(self.name_font.render(f"SLOT {i} - Level {data.get('level', 1)}", True, GOLD), (180, y+25))
+                self.screen.blit(self.small_font.render(f"HP: {data.get('hp')}/{data.get('max_hp')} | ATK: {data.get('base_atk')} | {data.get('gold')} G", True, TEXT_PRIMARY), (180, y+65))
+                
+                d_hover = del_rect.collidepoint(mx, my)
+                pygame.draw.rect(self.screen, ACCENT_RED_GLOW if d_hover else ACCENT_RED, del_rect)
+                pygame.draw.rect(self.screen, WHITE, del_rect, 1)
+                self.screen.blit(self.font.render("X", True, WHITE), (del_rect.centerx-10, del_rect.centery-12))
+            else:
+                t = self.name_font.render(f"SLOT {i} - EMPTY", True, TEXT_DIM)
+                self.screen.blit(t, (rect.centerx - t.get_width()//2, rect.centery - t.get_height()//2))
+
+    def draw_settings(self):
+        if self.state == STATE_PAUSE:
+            self.draw_overworld()
+            overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 200))
+            self.screen.blit(overlay, (0, 0))
+        else:
+            self.screen.fill(BG_DEEP)
+            self.draw_particles()
+            
+        box_w, box_h = 460, 420
+        bx = 400 - box_w//2
+        by = 100
+        
+        s = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        pygame.draw.rect(s, (15, 18, 30, 190), s.get_rect())
+        pygame.draw.rect(s, BORDER_SUBTLE, s.get_rect(), 1)
+        self.screen.blit(s, (bx, by))
+        
+        title_surf = self.name_font.render("SETTINGS", True, GOLD)
+        self.screen.blit(title_surf, (400 - title_surf.get_width()//2, by + 30))
+        
+        mx, my = pygame.mouse.get_pos()
+        
+        self.screen.blit(self.btn_font.render("MUSIC VOLUME", True, TEXT_SECONDARY), (210, 208))
+        
+        b1 = pygame.Rect(370, 200, 35, 35)
+        pygame.draw.rect(self.screen, (51, 65, 85) if b1.collidepoint(mx, my) else (30, 41, 59), b1)
+        self.screen.blit(self.font.render("-", True, WHITE), (382, 204))
+        
+        pygame.draw.rect(self.screen, (30, 30, 40), (415, 212, 100, 10))
+        pygame.draw.rect(self.screen, GOLD, (415, 212, int(100 * self.bgm_volume), 10))
+        
+        b2 = pygame.Rect(525, 200, 35, 35)
+        pygame.draw.rect(self.screen, (51, 65, 85) if b2.collidepoint(mx, my) else (30, 41, 59), b2)
+        self.screen.blit(self.font.render("+", True, WHITE), (535, 204))
+        self.screen.blit(self.small_font.render(f"{int(self.bgm_volume*100)}%", True, GOLD_LIGHT), (575, 208))
+        
+        self.screen.blit(self.btn_font.render("SCREEN SHAKE", True, TEXT_SECONDARY), (210, 288))
+        
+        sb = pygame.Rect(370, 280, 190, 35)
+        shover = sb.collidepoint(mx, my)
+        pygame.draw.rect(self.screen, BG_DARK if not shover else (30, 41, 59), sb)
+        pygame.draw.rect(self.screen, GOLD if self.shake_enabled else TEXT_DIM, sb, 1)
+        s_txt = "ON" if self.shake_enabled else "OFF"
+        t_col = GOLD_LIGHT if self.shake_enabled else TEXT_DIM
+        self.screen.blit(self.small_font.render(s_txt, True, t_col), (465 - self.small_font.size(s_txt)[0]//2, 288))
+        
+        if self.state == STATE_PAUSE:
+            self.draw_styled_btn("RESUME", 250, 370, 300, 45, pygame.Rect(250, 370, 300, 45).collidepoint(mx, my))
+            self.draw_styled_btn("SAVE & QUIT", 250, 430, 300, 45, pygame.Rect(250, 430, 300, 45).collidepoint(mx, my), True)
+        else:
+            self.draw_styled_btn("BACK", 250, 430, 300, 45, pygame.Rect(250, 430, 300, 45).collidepoint(mx, my))
 
     def draw_category_ui(self, cat, start_x, start_y):
         opts = self.options[cat]
@@ -812,35 +1130,36 @@ class PygameApp:
         self.screen.blit(ov, (0, 0))
         self.active_buttons = []
         
-        self.screen.blit(self.large_font.render("ARMORY", True, CYAN_400), (50, 40))
-        self.screen.blit(self.small_font.render("CHOOSE YOUR LOOK", True, SLATE_400), (55, 90))
+        self.screen.blit(self.large_font.render("ARMORY", True, GOLD), (50, 40))
+        self.screen.blit(self.small_font.render("CHOOSE YOUR LOOK", True, TEXT_SECONDARY), (55, 90))
         
         px, py = 175, 400
-        pygame.draw.ellipse(self.screen, SLATE_800, (px - 80, py, 160, 30))
-        pygame.draw.ellipse(self.screen, CYAN_500, (px - 70, py + 5, 140, 20), 2)
+        pygame.draw.ellipse(self.screen, BG_DARK, (px - 80, py, 160, 30))
+        pygame.draw.ellipse(self.screen, GOLD, (px - 70, py + 5, 140, 20), 2)
         self.screen.blit(self.player_preview_img, (px - self.player_preview_img.get_width()//2, py - self.player_preview_img.get_height() + 20))
         
         panel = pygame.Rect(330, 40, 440, 530)
-        pygame.draw.rect(self.screen, (15, 23, 42, 180), panel) 
-        pygame.draw.rect(self.screen, SLATE_700, panel, 2) 
+        s = pygame.Surface((panel.width, panel.height), pygame.SRCALPHA)
+        pygame.draw.rect(s, (15, 18, 30, 190), s.get_rect()) 
+        pygame.draw.rect(s, BORDER_SUBTLE, s.get_rect(), 2) 
+        self.screen.blit(s, panel.topleft)
         
         ty = 65
         for i, tab in enumerate(self.tabs):
             is_act = (self.current_tab == tab)
             rect = pygame.Rect(345, ty, 120, 48)
             if is_act:
-                pygame.draw.rect(self.screen, SLATE_800, rect) 
-                pygame.draw.rect(self.screen, CYAN_400, (rect.x, rect.y, 4, rect.height)) 
-            self.screen.blit(self.small_font.render(self.tab_names[i], True, CYAN_400 if is_act else SLATE_400), (rect.x + 15, rect.y + 16))
+                pygame.draw.rect(self.screen, BG_DARK, rect) 
+                pygame.draw.rect(self.screen, GOLD, (rect.x, rect.y, 4, rect.height)) 
+            self.screen.blit(self.small_font.render(self.tab_names[i], True, GOLD if is_act else TEXT_SECONDARY), (rect.x + 15, rect.y + 16))
             self.active_buttons.append({'rect': rect, 'type': 'tab', 'tab': tab})
             ty += 62
             
-        pygame.draw.line(self.screen, SLATE_700, (475, 60), (475, 540), 2)
+        pygame.draw.line(self.screen, BORDER_SUBTLE, (475, 60), (475, 540), 2)
         self.draw_category_ui(self.current_tab, 495, 60)
         
-        pygame.draw.rect(self.screen, CYAN_500, self.start_btn_rect) 
-        btn_txt = self.btn_font.render("START JOURNEY >", True, BLACK)
-        self.screen.blit(btn_txt, (self.start_btn_rect.centerx - btn_txt.get_width()//2, self.start_btn_rect.centery - btn_txt.get_height()//2))
+        mx, my = pygame.mouse.get_pos()
+        self.draw_styled_btn("START JOURNEY >", 495, 495, 260, 50, self.start_btn_rect.collidepoint(mx, my))
 
     def update_overworld(self):
         keys = pygame.key.get_pressed()
@@ -900,7 +1219,7 @@ class PygameApp:
                 px = self.map_player_pos[0] + self.game_map.camera_offset[0] + 32
                 py = self.map_player_pos[1] + self.game_map.camera_offset[1] - 20
                 if random.random() < 0.1:
-                    self.spawn_floating_text("PATH SEALED BY DIVINE AURA", px, py, RED_500, 'small')
+                    self.spawn_floating_text("PATH SEALED BY DIVINE AURA", px, py, ACCENT_RED_GLOW, 'small')
                 return
                 
             self.change_realm(target_rx, target_ry, exit_side)
@@ -923,8 +1242,8 @@ class PygameApp:
         start_x = (800 - (5 * slot_size + 4 * padding)) // 2
         hotbar_start_y = 540
         
-        slot_bg = (15, 23, 42, 160) 
-        border_color = (123, 165, 172, 100) 
+        slot_bg = BG_DARK 
+        border_color = BORDER_SUBTLE 
         
         if self.show_inventory:
             inv_start_y = hotbar_start_y - (3 * (slot_size + padding)) - 10
@@ -934,13 +1253,13 @@ class PygameApp:
             stats_y = inv_start_y - panel_h - 10
             
             stats_s = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-            pygame.draw.rect(stats_s, slot_bg, stats_s.get_rect())
-            pygame.draw.rect(stats_s, border_color, stats_s.get_rect(), 1)
+            pygame.draw.rect(stats_s, (15, 18, 30, 200), stats_s.get_rect())
+            pygame.draw.rect(stats_s, GOLD_DIM, stats_s.get_rect(), 1)
             surface.blit(stats_s, (start_x, stats_y))
             
-            title_surf = self.small_font.render("PLAYER STATS", True, AMBER_400)
-            hp_surf = self.tiny_font.render(f"HP: {self.player.hp} / {self.player_max_hp}", True, EMERALD_400)
-            atk_surf = self.tiny_font.render(f"ATK: {self.base_atk}", True, RED_500)
+            title_surf = self.small_font.render("PLAYER STATS", True, GOLD)
+            hp_surf = self.tiny_font.render(f"HP: {self.player.hp} / {self.player_max_hp}", True, TEXT_PRIMARY)
+            atk_surf = self.tiny_font.render(f"ATK: {self.base_atk}", True, TEXT_PRIMARY)
             
             surface.blit(title_surf, (start_x + 15, stats_y + 10))
             surface.blit(hp_surf, (start_x + 15, stats_y + 35))
@@ -970,7 +1289,7 @@ class PygameApp:
             pygame.draw.rect(s, border_color, s.get_rect(), 1) 
             surface.blit(s, (rect.x, rect.y))
             
-            surface.blit(self.tiny_font.render(str(i+1), True, SLATE_400), (rect.x+4, rect.y+2))
+            surface.blit(self.tiny_font.render(str(i+1), True, TEXT_DIM), (rect.x+4, rect.y+2))
             
             item = self.inventory[i]
             if item:
@@ -984,12 +1303,12 @@ class PygameApp:
 
     def draw_sealed_auras(self):
         aura_colors = {
-            "Zeus": (255, 255, 50, 100),
+            "Zeus": (201, 162, 39, 100),
             "Poseidon": (50, 100, 255, 100),
             "Hades": (180, 50, 255, 100),
             "Athena": (200, 200, 200, 100),
-            "Ares": (255, 50, 50, 100),
-            "Apollo": (255, 150, 50, 100),
+            "Ares": (196, 60, 60, 100),
+            "Apollo": (232, 200, 74, 100),
             "Hermes": (50, 255, 100, 100)
         }
         
@@ -1031,6 +1350,10 @@ class PygameApp:
 
     def draw_overworld(self):
         self.screen.fill(BLACK)
+        
+        if self.game_map.is_boss_realm and self.game_map.full_bg_image:
+            self.screen.blit(self.game_map.full_bg_image, (0, 0))
+            
         self.game_map.draw(self.screen)
         
         img = self.player_overworld_equipped_img
@@ -1042,6 +1365,11 @@ class PygameApp:
         player_screen_y = self.map_player_pos[1] + self.game_map.camera_offset[1]
         self.screen.blit(img, (player_screen_x, player_screen_y - by))
         
+        gear_rect = pygame.Rect(740, 20, 40, 40)
+        pygame.draw.rect(self.screen, BG_CARD, gear_rect)
+        pygame.draw.rect(self.screen, GOLD_DIM, gear_rect, 1)
+        self.screen.blit(self.name_font.render("||", True, GOLD), (752, 28))
+        
         self.draw_sealed_auras()
         
         if hasattr(self, 'nearby_interactables') and self.nearby_interactables and not self.showing_dialogue:
@@ -1051,8 +1379,8 @@ class PygameApp:
             box_w = 260
             box_h = 20 + (30 * len(self.nearby_interactables))
             prompt_box = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
-            pygame.draw.rect(prompt_box, (15, 23, 42, 180), prompt_box.get_rect()) 
-            pygame.draw.rect(prompt_box, (123, 165, 172, 100), prompt_box.get_rect(), 1) 
+            pygame.draw.rect(prompt_box, (15, 18, 30, 215), prompt_box.get_rect()) 
+            pygame.draw.rect(prompt_box, GOLD_DIM, prompt_box.get_rect(), 1) 
             
             px = player_screen_x - box_w//2 + 32
             py = player_screen_y - box_h - 10
@@ -1060,7 +1388,7 @@ class PygameApp:
             
             for i, o in enumerate(self.nearby_interactables):
                 is_sel = (i == self.interact_index)
-                color = WHITE if is_sel else SLATE_400
+                color = GOLD_LIGHT if is_sel else TEXT_SECONDARY
                 
                 if o.type == "statue":
                     text = f"> [SPACE] Battle: {o.data.get('god', 'Statue')}" if is_sel else f"  Battle: {o.data.get('god', 'Statue')}"
@@ -1074,46 +1402,45 @@ class PygameApp:
             dialogue_box = pygame.Rect(100, 400, 600, 120)
             
             s = pygame.Surface((dialogue_box.width, dialogue_box.height), pygame.SRCALPHA)
-            pygame.draw.rect(s, (15, 23, 42, 180), s.get_rect()) 
-            pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1) 
+            pygame.draw.rect(s, (15, 18, 30, 215), s.get_rect()) 
+            pygame.draw.rect(s, GOLD_DIM, s.get_rect(), 1) 
             self.screen.blit(s, dialogue_box.topleft)
             
             npc_name = self.current_npc.data.get('name', 'Stranger')
             npc_text = self.current_npc.data.get('dialogue', 'Hello there!')
             
-            self.screen.blit(self.name_font.render(npc_name, True, AMBER_400), (dialogue_box.x + 20, dialogue_box.y + 15))
-            self.screen.blit(self.small_font.render(npc_text, True, WHITE), (dialogue_box.x + 20, dialogue_box.y + 50))
+            self.screen.blit(self.name_font.render(npc_name, True, GOLD), (dialogue_box.x + 20, dialogue_box.y + 15))
+            self.screen.blit(self.small_font.render(npc_text, True, TEXT_PRIMARY), (dialogue_box.x + 20, dialogue_box.y + 50))
             
             if npc_name == 'Merchant': action_txt = "[SPACE] to Shop   |   [ESC] Leave"
             else: action_txt = "[SPACE] to Continue   |   [ESC] Leave"
             
-            action_surf = self.tiny_font.render(action_txt, True, CYAN_400)
+            action_surf = self.tiny_font.render(action_txt, True, TEXT_DIM)
             self.screen.blit(action_surf, (dialogue_box.right - action_surf.get_width() - 20, dialogue_box.bottom - 25))
         
-        custom_cyan = (123, 165, 172)
         if self.total_statues > 0:
-            statue_text = self.name_font.render(f"{self.statues_collected} / {self.total_statues}", True, WHITE)
+            statue_text = self.name_font.render(f"{self.statues_collected} / {self.total_statues}", True, TEXT_PRIMARY)
             box_width = statue_text.get_width() + 60
             box_height = 40
             box_x, box_y = 20, 20
             
             bg_surface = pygame.Surface((box_width, box_height), pygame.SRCALPHA)
-            pygame.draw.rect(bg_surface, (15, 23, 42, 200), bg_surface.get_rect()) 
+            pygame.draw.rect(bg_surface, (15, 18, 30, 190), bg_surface.get_rect()) 
             self.screen.blit(bg_surface, (box_x, box_y))
-            pygame.draw.rect(self.screen, custom_cyan, (box_x, box_y, box_width, box_height), 1) 
-            pygame.draw.circle(self.screen, AMBER_500, (box_x + 20, box_y + box_height // 2), 6)
+            pygame.draw.rect(self.screen, GOLD_DIM, (box_x, box_y, box_width, box_height), 1) 
+            pygame.draw.circle(self.screen, GOLD, (box_x + 20, box_y + box_height // 2), 6)
             self.screen.blit(statue_text, (box_x + 36, box_y + (box_height - statue_text.get_height()) // 2))
             
-        gold_text = self.name_font.render(f"{self.gold} G", True, WHITE)
+        gold_text = self.name_font.render(f"{self.gold} G", True, TEXT_PRIMARY)
         gold_width = gold_text.get_width() + 60
         gold_x = 20 if self.total_statues == 0 else 20 + box_width + 10
         gold_y = 20
         
         bg_surface_gold = pygame.Surface((gold_width, 40), pygame.SRCALPHA)
-        pygame.draw.rect(bg_surface_gold, (15, 23, 42, 200), bg_surface_gold.get_rect()) 
+        pygame.draw.rect(bg_surface_gold, (15, 18, 30, 190), bg_surface_gold.get_rect()) 
         self.screen.blit(bg_surface_gold, (gold_x, gold_y))
-        pygame.draw.rect(self.screen, custom_cyan, (gold_x, gold_y, gold_width, 40), 1) 
-        pygame.draw.circle(self.screen, EMERALD_500, (gold_x + 20, gold_y + 20), 6)
+        pygame.draw.rect(self.screen, GOLD_DIM, (gold_x, gold_y, gold_width, 40), 1) 
+        pygame.draw.circle(self.screen, GOLD_LIGHT, (gold_x + 20, gold_y + 20), 6)
         self.screen.blit(gold_text, (gold_x + 36, gold_y + (40 - gold_text.get_height()) // 2))
 
         self.draw_inventory_ui(self.screen)
@@ -1140,117 +1467,97 @@ class PygameApp:
         self.screen.blit(overlay, (0, 0))
         
         box = pygame.Rect(150, 150, 500, 260)
-        pygame.draw.rect(self.screen, (15, 23, 42), box)
-        pygame.draw.rect(self.screen, CYAN_500, box, 2)
+        s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
+        pygame.draw.rect(s, (15, 18, 30, 190), s.get_rect()) 
+        pygame.draw.rect(s, GOLD_DIM, s.get_rect(), 1) 
+        self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.font.render("WARP SCROLL", True, CYAN_400), (180, 180))
+        self.screen.blit(self.name_font.render("WARP SCROLL", True, GOLD), (180, 180))
         
         mx, my = pygame.mouse.get_pos()
+        self.draw_styled_btn("[1] Sanctuary (Base)", 180, 230, 440, 45, pygame.Rect(180, 230, 440, 45).collidepoint(mx, my))
+        self.draw_styled_btn(f"[2] Previous Area ({self.last_normal_realm[0]}, {self.last_normal_realm[1]})", 180, 290, 440, 45, pygame.Rect(180, 290, 440, 45).collidepoint(mx, my))
         
-        b1 = pygame.Rect(170, 240, 460, 50)
-        h1 = b1.collidepoint(mx, my)
-        pygame.draw.rect(self.screen, (255,255,255, 20) if h1 else (0,0,0,0), b1)
-        self.screen.blit(self.btn_font.render("[1] Sanctuary (Base)", True, EMERALD_400), (180, 255))
-        
-        b2 = pygame.Rect(170, 300, 460, 50)
-        h2 = b2.collidepoint(mx, my)
-        pygame.draw.rect(self.screen, (255,255,255, 20) if h2 else (0,0,0,0), b2)
-        self.screen.blit(self.btn_font.render(f"[2] Previous Area ({self.last_normal_realm[0]}, {self.last_normal_realm[1]})", True, AMBER_400), (180, 315))
-        
-        self.screen.blit(self.tiny_font.render("[ESC] Cancel", True, GRAY), (180, 370))
+        self.screen.blit(self.tiny_font.render("[ESC] Cancel", True, TEXT_DIM), (180, 360))
 
     def draw_shop(self):
         self.draw_overworld()
         overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 150)) 
+        overlay.fill((0, 0, 0, 180)) 
         self.screen.blit(overlay, (0, 0))
         
-        box = pygame.Rect(180, 80, 440, 260) 
+        box = pygame.Rect(180, 80, 440, 300) 
         s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
-        pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect()) 
-        pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1) 
+        pygame.draw.rect(s, (15, 18, 30, 190), s.get_rect()) 
+        pygame.draw.rect(s, GOLD_DIM, s.get_rect(), 1) 
         self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.font.render("MERCHANT'S SHOP", True, AMBER_500), (210, 100))
-        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, WHITE), (210, 140))
+        self.screen.blit(self.name_font.render("MERCHANT'S SHOP", True, GOLD), (210, 100))
+        self.screen.blit(self.small_font.render(f"Your Gold: {self.gold} G", True, TEXT_PRIMARY), (210, 140))
         
         potions_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'potion'])
         scrolls_owned = sum([item['qty'] for item in self.inventory if item and item['id'] == 'scroll'])
         
         mx, my = pygame.mouse.get_pos()
         
-        self.shop_potion_rect = pygame.Rect(200, 170, 400, 50)
+        self.shop_potion_rect = pygame.Rect(200, 180, 280, 45)
         p_hover = self.shop_potion_rect.collidepoint(mx, my)
-        if p_hover:
-            h_s = pygame.Surface((self.shop_potion_rect.w, self.shop_potion_rect.h), pygame.SRCALPHA)
-            h_s.fill((255, 255, 255, 25))
-            self.screen.blit(h_s, self.shop_potion_rect.topleft)
-        self.screen.blit(self.btn_font.render("[1] Health Potion (50G)", True, EMERALD_500 if p_hover else EMERALD_400), (210, 175))
-        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, WHITE if p_hover else SLATE_400), (210, 200))
+        self.draw_styled_btn("[1] Health Potion (50G)", 200, 180, 280, 45, p_hover)
+        self.screen.blit(self.small_font.render(f"Owned: {potions_owned}", True, WHITE if p_hover else TEXT_DIM), (500, 192))
         
-        self.shop_scroll_rect = pygame.Rect(200, 230, 400, 50)
+        self.shop_scroll_rect = pygame.Rect(200, 240, 280, 45)
         s_hover = self.shop_scroll_rect.collidepoint(mx, my)
-        if s_hover:
-            h_s = pygame.Surface((self.shop_scroll_rect.w, self.shop_scroll_rect.h), pygame.SRCALPHA)
-            h_s.fill((255, 255, 255, 25))
-            self.screen.blit(h_s, self.shop_scroll_rect.topleft)
-        self.screen.blit(self.btn_font.render("[2] Hint Scroll (50G)", True, CYAN_500 if s_hover else CYAN_400), (210, 235))
-        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, WHITE if s_hover else SLATE_400), (210, 260))
+        self.draw_styled_btn("[2] Hint Scroll (50G)", 200, 240, 280, 45, s_hover)
+        self.screen.blit(self.small_font.render(f"Owned: {scrolls_owned}", True, WHITE if s_hover else TEXT_DIM), (500, 252))
         
-        self.shop_exit_rect = pygame.Rect(200, 295, 400, 30)
+        self.shop_exit_rect = pygame.Rect(200, 310, 400, 45)
         e_hover = self.shop_exit_rect.collidepoint(mx, my)
-        self.screen.blit(self.small_font.render("[ESC] / Click here to leave", True, RED_500 if e_hover else GRAY), (210, 300))
+        self.draw_styled_btn("[ESC] Leave", 200, 310, 400, 45, e_hover, True)
 
     def draw_upgrade(self):
         self.draw_overworld()
         overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 150)) 
+        overlay.fill((0, 0, 0, 180)) 
         self.screen.blit(overlay, (0, 0))
         
-        box = pygame.Rect(150, 80, 500, 260)
+        box = pygame.Rect(150, 80, 500, 280)
         s = pygame.Surface((box.width, box.height), pygame.SRCALPHA)
-        pygame.draw.rect(s, (15, 23, 42, 200), s.get_rect()) 
-        pygame.draw.rect(s, (123, 165, 172, 100), s.get_rect(), 1) 
+        pygame.draw.rect(s, (15, 18, 30, 190), s.get_rect()) 
+        pygame.draw.rect(s, GOLD_DIM, s.get_rect(), 1) 
         self.screen.blit(s, box.topleft)
         
-        self.screen.blit(self.font.render("STATUE DESTROYED!", True, AMBER_500), (180, 100))
-        self.screen.blit(self.small_font.render("Blessing received! Choose an upgrade:", True, WHITE), (180, 140))
+        self.screen.blit(self.name_font.render("STATUE DESTROYED!", True, GOLD), (180, 100))
+        self.screen.blit(self.small_font.render("Blessing received! Choose an upgrade:", True, TEXT_PRIMARY), (180, 140))
         
         mx, my = pygame.mouse.get_pos()
-        self.upg_ares_rect = pygame.Rect(170, 170, 460, 50)
+        
+        self.upg_ares_rect = pygame.Rect(170, 180, 460, 55)
         a_hover = self.upg_ares_rect.collidepoint(mx, my)
-        if a_hover:
-            h_s = pygame.Surface((self.upg_ares_rect.w, self.upg_ares_rect.h), pygame.SRCALPHA)
-            h_s.fill((255, 255, 255, 25))
-            self.screen.blit(h_s, self.upg_ares_rect.topleft)
+        self.draw_styled_btn(f"[1] Power (Attack +{self.current_reward_atk})", 170, 180, 460, 55, a_hover)
+        self.screen.blit(self.tiny_font.render(f"Current Base ATK: {self.player.base_attack}", True, TEXT_DIM), (190, 215))
         
-        self.screen.blit(self.btn_font.render(f"[1] Ares' Power (Attack +{self.current_reward_atk})", True, RED_500), (180, 175))
-        self.screen.blit(self.small_font.render(f"Current Base ATK: {self.player.base_attack}", True, WHITE if a_hover else SLATE_400), (180, 200))
-        
-        self.upg_demeter_rect = pygame.Rect(170, 230, 460, 50)
+        self.upg_demeter_rect = pygame.Rect(170, 250, 460, 55)
         d_hover = self.upg_demeter_rect.collidepoint(mx, my)
-        if d_hover:
-            h_s = pygame.Surface((self.upg_demeter_rect.w, self.upg_demeter_rect.h), pygame.SRCALPHA)
-            h_s.fill((255, 255, 255, 25))
-            self.screen.blit(h_s, self.upg_demeter_rect.topleft)
-        
-        self.screen.blit(self.btn_font.render(f"[2] Demeter's Vitality (Max HP +{self.current_reward_hp} & Heal)", True, EMERALD_400), (180, 235))
-        self.screen.blit(self.small_font.render(f"Current Max HP: {self.player_max_hp}", True, WHITE if d_hover else SLATE_400), (180, 260))
+        self.draw_styled_btn(f"[2] Vitality (Max HP +{self.current_reward_hp} & Heal)", 170, 250, 460, 55, d_hover)
+        self.screen.blit(self.tiny_font.render(f"Current Max HP: {self.player_max_hp}", True, TEXT_DIM), (190, 285))
 
     def draw_modern_hp_bar(self, surface, x, y, curr, max_hp, fill, name):
         panel_w = 300
-        pygame.draw.rect(surface, (15, 23, 42, 220), (x, y, panel_w, 80)) 
+        s = pygame.Surface((panel_w, 80), pygame.SRCALPHA)
+        pygame.draw.rect(s, (15, 18, 30, 190), s.get_rect()) 
+        pygame.draw.rect(s, BORDER_SUBTLE, s.get_rect(), 1)
+        surface.blit(s, (x, y))
         
-        name_surf = self.small_font.render(name, True, WHITE)
+        name_surf = self.small_font.render(name, True, GOLD)
         surface.blit(name_surf, (x + 15, y + 15))
         
         ratio = max(0.0, min(1.0, curr / max_hp))
         pct = int(ratio * 100)
-        txt = self.small_font.render(f"{curr}/{max_hp} HP", True, SLATE_400)
+        txt = self.small_font.render(f"{curr}/{max_hp} HP", True, TEXT_PRIMARY)
         surface.blit(txt, (x + panel_w - 15 - txt.get_width(), y + 15))
         
         bx, by, bw, bh = x + 15, y + 45, panel_w - 30, 20
-        pygame.draw.rect(surface, BLACK, (bx, by, bw, bh)) 
+        pygame.draw.rect(surface, BG_DARK, (bx, by, bw, bh)) 
         if ratio > 0: pygame.draw.rect(surface, fill, (bx, by, int(bw * ratio), bh)) 
 
     def draw_battle(self):
@@ -1263,7 +1570,7 @@ class PygameApp:
         if self.current_battle_bg:
             battle_surf.blit(self.current_battle_bg, (0, 0))
             overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-            overlay.fill((15, 23, 42, 100)) 
+            overlay.fill((10, 10, 15, 80)) 
             battle_surf.blit(overlay, (0, 0))
         else:
             battle_surf.blit(self.battle_bg, (0, 0))
@@ -1283,12 +1590,12 @@ class PygameApp:
         battle_surf.blit(self.enemy_battle_img, (self.enemy_battle_pos[0] + self.e_anim_x, self.enemy_battle_pos[1] + fo))
         battle_surf.blit(self.player_battle_img, (self.player_battle_pos[0] + self.p_anim_x, self.player_battle_pos[1] - fo))
         
-        self.draw_modern_hp_bar(battle_surf, 40, 30, self.enemy.current_hp, self.enemy.max_hp, RED_500, self.enemy.name.upper())
-        self.draw_modern_hp_bar(battle_surf, 460, 320, self.player.hp, self.player_max_hp, EMERALD_500, "PLAYER")
+        self.draw_modern_hp_bar(battle_surf, 40, 30, self.enemy.current_hp, self.enemy.max_hp, ACCENT_RED_GLOW, self.enemy.name.upper())
+        self.draw_modern_hp_bar(battle_surf, 460, 320, self.player.hp, self.player_max_hp, GOLD_LIGHT, "PLAYER")
         
         if self.player.combo_count > 0:
             bonus_dmg = int(self.player.combo_count * 20)
-            combo_txt = self.btn_font.render(f"COMBO x{self.player.combo_count} (ATK +{bonus_dmg}%)", True, AMBER_400)
+            combo_txt = self.btn_font.render(f"COMBO x{self.player.combo_count} (ATK +{bonus_dmg}%)", True, GOLD)
             battle_surf.blit(combo_txt, (460, 295))
         
         for t in self.floating_texts[:]:
@@ -1308,7 +1615,7 @@ class PygameApp:
             if t['timer'] <= 0: self.floating_texts.remove(t)
             
         if self.crit_timer > 0:
-            crit_txt = self.combo_font.render("CRITICAL!", True, AMBER_500)
+            crit_txt = self.combo_font.render("CRITICAL!", True, ACCENT_RED_GLOW)
             c_x_crit = self.enemy_battle_pos[0] + 80 - crit_txt.get_width() // 2
             c_y_crit = self.enemy_battle_pos[1] - 40 - ((60 - self.crit_timer) * 0.5)
             battle_surf.blit(self.combo_font.render("CRITICAL!", True, BLACK), (c_x_crit + 2, c_y_crit + 2))
@@ -1316,14 +1623,16 @@ class PygameApp:
             self.crit_timer -= 1 
 
         board_start_y = 440
-        pygame.draw.rect(battle_surf, (15, 23, 42, 240), (0, board_start_y, 800, 160)) 
-        pygame.draw.line(battle_surf, SLATE_700, (0, board_start_y), (800, board_start_y), 2)
+        s_board = pygame.Surface((800, 160), pygame.SRCALPHA)
+        pygame.draw.rect(s_board, (15, 18, 30, 240), s_board.get_rect())
+        battle_surf.blit(s_board, (0, board_start_y))
+        pygame.draw.line(battle_surf, GOLD_DIM, (0, board_start_y), (800, board_start_y), 2)
 
         total_potions = sum([item['qty'] for item in self.inventory if item and item['id'] == 'potion'])
         total_scrolls = sum([item['qty'] for item in self.inventory if item and item['id'] == 'scroll'])
         
         if not self.gm.game_over:
-            flee_surf = self.tiny_font.render(f"PRESS [ESC] TO FLEE (LOST COMBO) | [1] POTION ({total_potions}) | [2] HINT SCROLL ({total_scrolls})", True, SLATE_400)
+            flee_surf = self.tiny_font.render(f"PRESS [ESC] TO FLEE (LOST COMBO) | [1] POTION ({total_potions}) | [2] HINT SCROLL ({total_scrolls})", True, TEXT_DIM)
             battle_surf.blit(flee_surf, (20, board_start_y - 25))
 
         box, m = 50, 10
@@ -1336,53 +1645,55 @@ class PygameApp:
             hs = self.small_font.render(hint, True, BLACK)
             br = hs.get_rect(midbottom=(self.player_battle_pos[0] + 120, self.player_battle_pos[1] - 20))
             pygame.draw.rect(battle_surf, WHITE, br.inflate(20, 15)) 
-            pygame.draw.rect(battle_surf, EMERALD_500, br.inflate(20, 15), 2) 
+            pygame.draw.rect(battle_surf, GOLD, br.inflate(20, 15), 2) 
             battle_surf.blit(hs, br)
 
-        battle_surf.blit(self.small_font.render("ABSENT", True, SLATE_700), (40, board_start_y + 15))
+        battle_surf.blit(self.small_font.render("ABSENT", True, TEXT_SECONDARY), (40, board_start_y + 15))
         absent_x, absent_y = 40, board_start_y + 40
         for i, char in enumerate(sorted(list(self.absent_letters))):
             r, c = i // 6, i % 6
-            pygame.draw.rect(battle_surf, BLACK, (absent_x + c*25, absent_y + r*25, 20, 20)) 
-            battle_surf.blit(self.small_font.render(char, True, SLATE_700), (absent_x + c*25 + 6, absent_y + r*25 + 3))
+            pygame.draw.rect(battle_surf, BG_DARK, (absent_x + c*25, absent_y + r*25, 20, 20)) 
+            battle_surf.blit(self.small_font.render(char, True, TEXT_DIM), (absent_x + c*25 + 6, absent_y + r*25 + 3))
 
         for col in range(5):
             x = cx + col * (box + m)
             char = self.current_guess[col] if col < len(self.current_guess) else ""
             is_active = (col == len(self.current_guess) and not self.gm.game_over)
             
-            pygame.draw.rect(battle_surf, SLATE_800 if char else BLACK, (x, cy, box, box)) 
+            pygame.draw.rect(battle_surf, (30, 35, 50) if char else BG_DARK, (x, cy, box, box)) 
             
             if char:
                 t = self.font.render(char, True, WHITE)
                 t_rect = t.get_rect(center=(x + box // 2, cy + box // 2))
                 battle_surf.blit(t, t_rect)
             
-            pygame.draw.rect(battle_surf, CYAN_400 if is_active else SLATE_700, (x, cy, box, box), 2 if not is_active else 3) 
+            pygame.draw.rect(battle_surf, GOLD if is_active else BORDER_SUBTLE, (x, cy, box, box), 2 if not is_active else 3) 
 
-        battle_surf.blit(self.small_font.render("BEST KNOWN", True, EMERALD_500), (580, board_start_y + 15))
+        battle_surf.blit(self.small_font.render("BEST KNOWN", True, GOLD_LIGHT), (580, board_start_y + 15))
         right_x, right_y = 580, board_start_y + 40
         for i in range(5):
             rx = right_x + i*30
             c_char = self.green_letters[i]
-            pygame.draw.rect(battle_surf, EMERALD_500 if c_char else SLATE_800, (rx, right_y, 25, 25)) 
+            pygame.draw.rect(battle_surf, GOLD if c_char else BG_DARK, (rx, right_y, 25, 25)) 
             if c_char: battle_surf.blit(self.small_font.render(c_char, True, BLACK), (rx + 7, right_y + 5))
         
         if self.yellow_letters:
-            battle_surf.blit(self.small_font.render("PRESENT:", True, AMBER_500), (right_x, right_y + 40))
+            battle_surf.blit(self.small_font.render("PRESENT:", True, TEXT_PRIMARY), (right_x, right_y + 40))
             for i, char in enumerate(sorted(list(self.yellow_letters))):
-                pygame.draw.rect(battle_surf, AMBER_500, (right_x + 75 + i*25, right_y + 35, 20, 20)) 
+                pygame.draw.rect(battle_surf, TEXT_PRIMARY, (right_x + 75 + i*25, right_y + 35, 20, 20)) 
                 battle_surf.blit(self.small_font.render(char, True, BLACK), (right_x + 75 + i*25 + 5, right_y + 38))
 
         if self.gm.game_over:
             msg = "VICTORY!" if self.enemy.current_hp <= 0 else "DEFEATED!"
-            msg_color = EMERALD_400 if self.enemy.current_hp <= 0 else RED_500
+            msg_color = GOLD_LIGHT if self.enemy.current_hp <= 0 else ACCENT_RED_GLOW
             
             txt_surface = self.large_font.render(msg, True, msg_color)
             txt_rect = txt_surface.get_rect(center=(self.screen_width // 2, 280))
+            
+            pygame.draw.rect(battle_surf, (0,0,0,150), (txt_rect.x-20, txt_rect.y-10, txt_rect.width+40, txt_rect.height+60))
             battle_surf.blit(txt_surface, txt_rect)
             
-            sub_txt = self.small_font.render("Press SPACE to return", True, WHITE)
+            sub_txt = self.small_font.render("Press SPACE to continue", True, WHITE)
             sub_rect = sub_txt.get_rect(center=(self.screen_width // 2, 330))
             battle_surf.blit(sub_txt, sub_rect)
 
@@ -1392,12 +1703,15 @@ class PygameApp:
         clock = pygame.time.Clock()
         while True:
             self.handle_events()
-            if self.state == STATE_SELECTION: self.draw_selection()
+            if self.state == STATE_MAIN_MENU: self.draw_main_menu()
+            elif self.state == STATE_SAVE_SLOTS: self.draw_save_slots()
+            elif self.state == STATE_SELECTION: self.draw_selection()
             elif self.state == STATE_OVERWORLD: self.update_overworld(); self.draw_overworld()
             elif self.state == STATE_BATTLE: self.draw_battle()
             elif self.state == STATE_SHOP: self.draw_shop()
             elif self.state == STATE_UPGRADE: self.draw_upgrade()
             elif self.state == STATE_WARP: self.draw_warp_menu() 
+            elif self.state in [STATE_PAUSE, STATE_SETTINGS]: self.draw_settings()
             pygame.display.flip(); clock.tick(60)
 
 if __name__ == "__main__":
