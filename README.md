@@ -43,7 +43,7 @@ python main.py
 
 ## Mac
 
-1. Open Terminal in the project root.
+1. Open Terminal in the project root
 2. Create a virtual environment:
 
 ```bash
@@ -160,6 +160,7 @@ cryptic_combat/
 # Unfinished Works
 
 - Codebase modularization is still in progress. `game_app.py` is already much smaller, but some logic can still be separated further into smaller state-specific modules if needed
+- DESCRIPTION.md, UML Class Diagram Unfinished
 
 # External Sources
 
