@@ -6,6 +6,8 @@ import random
 import json
 import time
 import csv
+import shutil
+import statistics
 from src.config import DATA_DIR, RAW_DATA_DIR, WORDS_DATA_DIR, BASE_DIR
 from src.game_manager import GameManager
 from src.entities import Player, Enemy
@@ -122,6 +124,7 @@ class PygameApp:
         self.state = STATE_MAIN_MENU
         
         self.gm = GameManager()
+        self.sync_slot_file_paths()
         self.dictionary = WordDictionary("normal")
         self.board = TileBoard()
         
@@ -131,8 +134,12 @@ class PygameApp:
         self.inv_scroll = 0
         self.dragged_item = None
         self.dragged_from_idx = -1
+        self.dragging_volume_slider = False
         
         self.stats_data = {'time': [], 'attempts': [], 'combo': [], 'damage': [], 'keys': []}
+        self.expanded_graph_key = None
+        self.expanded_summary = False
+        self.stats_view_mode = "charts"
         
         self.setup_assets()
         self.setup_selection()
@@ -145,33 +152,8 @@ class PygameApp:
         self.current_bgm = None
         self.current_battle_bg = None 
         self.defeated_bosses = {} 
-        
-        db_path = os.path.join(BASE_DIR, "data/defeated_bosses.json")
-        if os.path.exists(db_path):
-            try:
-                with open(db_path, 'r') as f:
-                    self.defeated_bosses = json.load(f)
-            except json.JSONDecodeError:
-                self.defeated_bosses = {}
-        
-        self.generated_boss_levels = set()
-        maps_dir = os.path.join(BASE_DIR, "data/maps")
-        if os.path.exists(maps_dir):
-            for f in os.listdir(maps_dir):
-                if f.endswith('.json') and f.startswith('realm_'):
-                    try:
-                        with open(os.path.join(maps_dir, f), 'r') as mf:
-                            mdata = json.load(mf)
-                            for obj in mdata.get('objects', []):
-                                if obj.get('type') == 'statue' and obj.get('data', {}).get('tier') == 'Boss':
-                                    parts = f.replace('realm_', '').replace('.json', '').split('_')
-                                    rx, ry = int(parts[0]), int(parts[1])
-                                    lvl = abs(rx) + abs(ry) + 1
-                                    self.generated_boss_levels.add(lvl)
-                                    break
-                    except: pass
-        
-        self.game_map = GameMap(self.realm_x, self.realm_y, False)
+
+        self.game_map = GameMap(self.realm_x, self.realm_y, False, map_root=self.get_active_map_root())
         self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
         self.total_statues = len(self.game_map.get_statues())
         
@@ -199,7 +181,7 @@ class PygameApp:
 
     def load_stats_csv(self):
         self.stats_data = {'time': [], 'attempts': [], 'combo': [], 'damage': [], 'keys': []}
-        path = os.path.join(BASE_DIR, "data", "raw", "gameplay_stats.csv")
+        path = self.get_stats_csv_path()
         if os.path.exists(path):
             try:
                 with open(path, 'r') as f:
@@ -222,6 +204,49 @@ class PygameApp:
             except:
                 self.saves = {"1": None, "2": None, "3": None}
 
+    def get_slot_dir(self, slot=None):
+        slot = self.current_save_slot if slot is None else slot
+        if not slot:
+            return os.path.join(BASE_DIR, "data", "session")
+        return os.path.join(BASE_DIR, "data", "slots", f"slot_{slot}")
+
+    def get_active_map_root(self):
+        return os.path.join(self.get_slot_dir(), "maps")
+
+    def get_bosses_path(self, slot=None):
+        return os.path.join(self.get_slot_dir(slot), "defeated_bosses.json")
+
+    def get_stats_csv_path(self, slot=None):
+        return os.path.join(BASE_DIR, "data", "raw", "gameplay_stats.csv")
+
+    def sync_slot_file_paths(self):
+        self.gm.set_csv_filename(self.get_stats_csv_path())
+
+    def load_slot_progress(self, slot=None):
+        self.defeated_bosses = {}
+        path = self.get_bosses_path(slot)
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    self.defeated_bosses = json.load(f)
+                return True
+            except json.JSONDecodeError:
+                self.defeated_bosses = {}
+        return False
+
+    def save_slot_progress(self):
+        if not self.current_save_slot:
+            return
+        path = self.get_bosses_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            json.dump(self.defeated_bosses, f)
+
+    def delete_slot_progress(self, slot):
+        slot_dir = self.get_slot_dir(slot)
+        if os.path.exists(slot_dir):
+            shutil.rmtree(slot_dir, ignore_errors=True)
+
     def save_game_data(self):
         if not self.current_save_slot: return
         self.saves[str(self.current_save_slot)] = {
@@ -235,17 +260,18 @@ class PygameApp:
             "pos": self.map_player_pos,
             "defeated_bosses": self.defeated_bosses,
             "selections": self.selections,
-            "level": self.current_level,
-            "generated_bosses": list(self.generated_boss_levels) if hasattr(self, 'generated_boss_levels') else []
+            "level": self.current_level
         }
         path = os.path.join(BASE_DIR, "data", "saves.json")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w') as f:
             json.dump(self.saves, f)
+        self.save_slot_progress()
 
     def load_game_data(self, slot):
         data = self.saves[str(slot)]
         self.current_save_slot = slot
+        self.sync_slot_file_paths()
         self.player_max_hp = data.get("max_hp", 100)
         self.base_atk = data.get("base_atk", 15)
         self.player = Player(hp=data.get("hp", 100), base_attack=self.base_atk)
@@ -258,14 +284,14 @@ class PygameApp:
         self.realm_x = data.get("realm_x", 0)
         self.realm_y = data.get("realm_y", 0)
         self.map_player_pos = data.get("pos", [15*64, 15*64])
-        self.defeated_bosses = data.get("defeated_bosses", {})
+        if not self.load_slot_progress(slot):
+            self.defeated_bosses = data.get("defeated_bosses", {})
         self.selections = data.get("selections", {k: 0 for k in self.tabs})
         self.current_level = data.get("level", 1)
-        self.generated_boss_levels = set(data.get("generated_bosses", []))
         self.inv_scroll = 0
         
         self.update_player_visuals()
-        self.game_map = GameMap(self.realm_x, self.realm_y)
+        self.game_map = GameMap(self.realm_x, self.realm_y, map_root=self.get_active_map_root())
         self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
         self.total_statues = len(self.game_map.get_statues())
         
@@ -292,8 +318,11 @@ class PygameApp:
 
     def start_new_game(self, slot):
         self.current_save_slot = slot
+        self.sync_slot_file_paths()
         self.reset_player_data()
-        self.game_map = GameMap(0, 0)
+        self.delete_slot_progress(slot)
+        self.load_slot_progress(slot)
+        self.game_map = GameMap(0, 0, map_root=self.get_active_map_root())
         self.map_player_pos = list(self.game_map.spawn_point)
         self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
         self.total_statues = len(self.game_map.get_statues())
@@ -461,20 +490,10 @@ class PygameApp:
             self.last_normal_realm = (self.realm_x, self.realm_y)
         
         target_level = abs(target_x) + abs(target_y) + 1
-        is_boss_tier = (target_level > 1 and target_level % 5 == 0)
-        target_file = os.path.join(BASE_DIR, f"data/maps/realm_{target_x}_{target_y}.json")
-        
-        force_normal = False
-        if not os.path.exists(target_file) and is_boss_tier:
-            if target_level in self.generated_boss_levels:
-                force_normal = True  
-            else:
-                self.generated_boss_levels.add(target_level)
-                
         self.realm_x = target_x
         self.realm_y = target_y
         self.current_level = target_level
-        self.game_map = GameMap(self.realm_x, self.realm_y, force_normal)
+        self.game_map = GameMap(self.realm_x, self.realm_y, map_root=self.get_active_map_root())
         
         self.total_statues = len(self.game_map.get_statues())
         self.statues_collected = len([s for s in self.game_map.get_statues() if s.collected])
@@ -507,6 +526,12 @@ class PygameApp:
         if item['qty'] <= 0:
             self.inventory[self.pending_warp_idx] = None
         self.change_realm(tx, ty, 'teleport')
+        self.state = STATE_OVERWORLD
+
+    def return_to_sanctuary_after_defeat(self):
+        self.player.hp = self.player_max_hp
+        self.change_realm(0, 0, 'teleport')
+        self.last_normal_realm = (0, 0)
         self.state = STATE_OVERWORLD
 
     def spawn_floating_text(self, text, x, y, color, font_type='large'):
@@ -700,6 +725,7 @@ class PygameApp:
                         
                         if data and del_rect.collidepoint(mx, my):
                             self.saves[str(i)] = None
+                            self.delete_slot_progress(i)
                             path = os.path.join(BASE_DIR, "data", "saves.json")
                             with open(path, 'w') as f: json.dump(self.saves, f)
                             
@@ -709,33 +735,63 @@ class PygameApp:
 
             elif self.state in [STATE_SETTINGS, STATE_PAUSE]:
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    self.dragging_volume_slider = False
                     self.state = STATE_OVERWORLD if self.state == STATE_PAUSE else STATE_MAIN_MENU
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mx, my = event.pos
+                    layout = self.get_settings_layout()
                     
-                    if pygame.Rect(370, 200, 35, 35).collidepoint(mx, my):
-                        self.bgm_volume = max(0.0, self.bgm_volume - 0.1)
-                        pygame.mixer.music.set_volume(self.bgm_volume)
-                    elif pygame.Rect(525, 200, 35, 35).collidepoint(mx, my):
-                        self.bgm_volume = min(1.0, self.bgm_volume + 0.1)
-                        pygame.mixer.music.set_volume(self.bgm_volume)
+                    if layout["slider"].inflate(0, 18).collidepoint(mx, my):
+                        self.dragging_volume_slider = True
+                        self.update_bgm_volume_from_pos(mx)
                         
-                    if pygame.Rect(410, 280, 190, 35).collidepoint(mx, my):
+                    if layout["shake"].collidepoint(mx, my):
                         self.shake_enabled = not self.shake_enabled
                         
                     if self.state == STATE_PAUSE:
-                        if pygame.Rect(250, 370, 300, 45).collidepoint(mx, my):
+                        if layout["resume"].collidepoint(mx, my):
                             self.state = STATE_OVERWORLD
-                        elif pygame.Rect(250, 430, 300, 45).collidepoint(mx, my):
+                        elif layout["quit"].collidepoint(mx, my):
                             self.save_game_data()
                             self.state = STATE_MAIN_MENU
                     else:
-                        if pygame.Rect(250, 430, 300, 45).collidepoint(mx, my):
+                        if layout["back"].collidepoint(mx, my):
                             self.state = STATE_MAIN_MENU
+                elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    self.dragging_volume_slider = False
+                elif event.type == pygame.MOUSEMOTION and self.dragging_volume_slider:
+                    self.update_bgm_volume_from_pos(event.pos[0])
 
             elif self.state == STATE_OVERWORLD: 
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mx, my = event.pos
+
+                    if self.show_inventory and self.expanded_summary:
+                        if self.get_expanded_summary_close_rect().collidepoint(mx, my) or not self.get_expanded_summary_panel_rect().collidepoint(mx, my):
+                            self.expanded_summary = False
+                        return
+
+                    if self.show_inventory and self.expanded_graph_key:
+                        if self.get_expanded_graph_close_rect().collidepoint(mx, my) or not self.get_expanded_graph_panel_rect().collidepoint(mx, my):
+                            self.expanded_graph_key = None
+                        return
+
+                    if self.show_inventory:
+                        for mode, rect in self.get_stats_tab_rects().items():
+                            if rect.collidepoint(mx, my):
+                                if mode == "summary":
+                                    self.expanded_graph_key = None
+                                    self.expanded_summary = True
+                                else:
+                                    self.stats_view_mode = "charts"
+                                    self.expanded_summary = False
+                                return
+
+                        if self.stats_view_mode == "charts":
+                            clicked_graph = self.get_stats_chart_at_pos(event.pos)
+                            if clicked_graph:
+                                self.expanded_graph_key = clicked_graph
+                                return
                     
                     if pygame.Rect(740, 20, 40, 40).collidepoint(mx, my):
                         self.state = STATE_PAUSE
@@ -767,6 +823,14 @@ class PygameApp:
                         self.dragged_from_idx = -1
                         
                 elif event.type == pygame.KEYDOWN:
+                    if self.show_inventory and self.expanded_summary and event.key == pygame.K_ESCAPE:
+                        self.expanded_summary = False
+                        return
+
+                    if self.show_inventory and self.expanded_graph_key and event.key == pygame.K_ESCAPE:
+                        self.expanded_graph_key = None
+                        return
+
                     if self.showing_dialogue:
                         if event.key in (pygame.K_SPACE, pygame.K_RETURN):
                             self.showing_dialogue = False
@@ -800,8 +864,12 @@ class PygameApp:
                                     self.dialogue_timer = 180  
                         elif event.key == pygame.K_e:
                             self.show_inventory = not self.show_inventory
+                            if not self.show_inventory:
+                                self.expanded_graph_key = None
+                                self.expanded_summary = False
                             if self.show_inventory:
                                 self.load_stats_csv()
+                                self.stats_view_mode = "charts"
                         elif pygame.K_1 <= event.key <= pygame.K_5:
                             self.use_item(event.key - pygame.K_1)
 
@@ -903,8 +971,7 @@ class PygameApp:
                                 self.save_game_data()
                                 self.state = STATE_UPGRADE 
                             else:
-                                self.player.hp = self.player_max_hp
-                                self.state = STATE_OVERWORLD 
+                                self.return_to_sanctuary_after_defeat()
                     else:
                         if event.key == pygame.K_ESCAPE:
                             self.state = STATE_OVERWORLD
@@ -1128,10 +1195,44 @@ class PygameApp:
                 t = self.name_font.render(f"SLOT {i} - EMPTY", True, TEXT_DIM)
                 self.screen.blit(t, (rect.centerx - t.get_width()//2, rect.centery - t.get_height()//2))
 
-    def draw_line_chart(self, surface, x, y, w, h, data, color, title, mx, my):
+    def format_chart_value(self, value):
+        if abs(value - round(value)) < 0.01:
+            return str(int(round(value)))
+        return f"{value:.1f}"
+
+    def draw_chart_axes(self, surface, x, y, w, h, title, x_label, y_label, max_val):
+        title_y = y + 5
+        plot_left = x + 42
+        plot_right = x + w - 14
+        plot_top = y + 30
+        plot_bottom = y + h - 20
+
+        surface.blit(self.tiny_font.render(title, True, TEXT_PRIMARY), (x + 5, title_y))
+        pygame.draw.line(surface, BORDER_SUBTLE, (plot_left, plot_top), (plot_left, plot_bottom), 1)
+        pygame.draw.line(surface, BORDER_SUBTLE, (plot_left, plot_bottom), (plot_right, plot_bottom), 1)
+
+        y_ticks = [0, max_val * 0.5, max_val]
+        for tick in y_ticks:
+            if max_val <= 0:
+                tick_y = plot_bottom
+            else:
+                tick_y = plot_bottom - int((tick / max_val) * (plot_bottom - plot_top))
+            pygame.draw.line(surface, (50, 58, 78), (plot_left, tick_y), (plot_right, tick_y), 1)
+            label = self.tiny_font.render(self.format_chart_value(tick), True, TEXT_DIM)
+            surface.blit(label, (x + 6, tick_y - label.get_height() // 2))
+
+        x_text = self.tiny_font.render(x_label, True, TEXT_DIM)
+        surface.blit(x_text, (plot_right - x_text.get_width(), plot_bottom + 2))
+
+        y_text = self.tiny_font.render(y_label, True, TEXT_DIM)
+        y_text_rot = pygame.transform.rotate(y_text, 90)
+        surface.blit(y_text_rot, (x + 2, plot_top))
+
+        return plot_left, plot_right, plot_top, plot_bottom
+
+    def draw_line_chart(self, surface, x, y, w, h, data, color, title, mx, my, x_label="Recent Encounters", y_label="Value"):
         pygame.draw.rect(surface, (20, 25, 40, 200), (x, y, w, h))
         pygame.draw.rect(surface, BORDER_SUBTLE, (x, y, w, h), 1)
-        surface.blit(self.tiny_font.render(title, True, TEXT_PRIMARY), (x+5, y+5))
         
         if not data:
             no_data = self.tiny_font.render("NO DATA", True, TEXT_DIM)
@@ -1141,14 +1242,14 @@ class PygameApp:
         data = data[-20:]
         max_val = max(data) if max(data) > 0 else 1
         pts = []
-        pad_x, pad_y = 15, 25
+        plot_left, plot_right, plot_top, plot_bottom = self.draw_chart_axes(surface, x, y, w, h, title, x_label, y_label, max_val)
         
         hovered_val = None
         hovered_pos = None
 
         for i, val in enumerate(data):
-            px = x + pad_x + (i / max(1, len(data)-1)) * (w - 2*pad_x)
-            py = y + h - 5 - (val / max_val) * (h - pad_y - 10)
+            px = plot_left + (i / max(1, len(data)-1)) * (plot_right - plot_left)
+            py = plot_bottom - (val / max_val) * (plot_bottom - plot_top)
             pts.append((px, py))
             if math.hypot(mx - px, my - py) < 8:
                 hovered_val = val
@@ -1167,10 +1268,9 @@ class PygameApp:
             pygame.draw.rect(surface, GOLD, tr.inflate(8, 4), 1)
             surface.blit(ts, tr)
 
-    def draw_bar_chart(self, surface, x, y, w, h, data, color, title, mx, my):
+    def draw_bar_chart(self, surface, x, y, w, h, data, color, title, mx, my, x_label="Recent Encounters", y_label="Value"):
         pygame.draw.rect(surface, (20, 25, 40, 200), (x, y, w, h))
         pygame.draw.rect(surface, BORDER_SUBTLE, (x, y, w, h), 1)
-        surface.blit(self.tiny_font.render(title, True, TEXT_PRIMARY), (x+5, y+5))
         
         if not data:
             no_data = self.tiny_font.render("NO DATA", True, TEXT_DIM)
@@ -1179,16 +1279,17 @@ class PygameApp:
             
         data = data[-20:]
         max_val = max(data) if max(data) > 0 else 1
-        pad_x, pad_y = 15, 25
-        bar_w = max(2, (w - 2*pad_x) // len(data) - 2)
+        plot_left, plot_right, plot_top, plot_bottom = self.draw_chart_axes(surface, x, y, w, h, title, x_label, y_label, max_val)
+        gap = 2
+        bar_w = max(2, int((plot_right - plot_left - max(0, len(data) - 1) * gap) / max(1, len(data))))
         
         hovered_val = None
         hovered_pos = None
 
         for i, val in enumerate(data):
-            px = x + pad_x + i * (bar_w + 2)
-            ph = (val / max_val) * (h - pad_y - 10)
-            py = y + h - 5 - ph
+            px = plot_left + i * (bar_w + gap)
+            ph = (val / max_val) * (plot_bottom - plot_top)
+            py = plot_bottom - ph
             rect = pygame.Rect(px, py, bar_w, ph)
             pygame.draw.rect(surface, color, rect)
             
@@ -1203,6 +1304,336 @@ class PygameApp:
             pygame.draw.rect(surface, (0,0,0,220), tr.inflate(8, 4))
             pygame.draw.rect(surface, GOLD, tr.inflate(8, 4), 1)
             surface.blit(ts, tr)
+
+    def get_stats_panel_rect(self):
+        panel_x, panel_y = 400, 50
+        panel_w = min(360, self.screen_width - panel_x - 40)
+        panel_h = min(460, self.screen_height - panel_y - 40)
+        return pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+
+    def get_stats_chart_specs(self, graph_x=None, graph_y=None, graph_w=None, graph_h=None):
+        panel_rect = self.get_stats_panel_rect()
+        graph_x = panel_rect.x if graph_x is None else graph_x
+        graph_y = panel_rect.y if graph_y is None else graph_y
+        graph_w = panel_rect.width if graph_w is None else graph_w
+        graph_h = panel_rect.height if graph_h is None else graph_h
+
+        gx = graph_x + 20
+        gw = graph_w - 40
+        chart_top = graph_y + 98
+        chart_gap = 10
+        bottom_padding = 16
+        gh = max(74, int((graph_h - (chart_top - graph_y) - bottom_padding - chart_gap * 3) / 4))
+        return [
+            {"key": "damage", "kind": "line", "x": gx, "y": chart_top, "w": gw, "h": gh, "data": self.stats_data['damage'], "color": ACCENT_RED_GLOW, "title": "DAMAGE PER TURN (TREND)", "x_label": "Recent Turns", "y_label": "Damage"},
+            {"key": "time", "kind": "bar", "x": gx, "y": chart_top + (gh + chart_gap), "w": gw, "h": gh, "data": self.stats_data['time'], "color": GOLD, "title": "TIME TAKEN PER WORD (SEC)", "x_label": "Recent Words", "y_label": "Seconds"},
+            {"key": "keys", "kind": "line", "x": gx, "y": chart_top + (gh + chart_gap) * 2, "w": gw, "h": gh, "data": self.stats_data['keys'], "color": EMERALD_500, "title": "KEYSTROKES PER WORD", "x_label": "Recent Words", "y_label": "Keys"},
+            {"key": "combo", "kind": "bar", "x": gx, "y": chart_top + (gh + chart_gap) * 3, "w": gw, "h": gh, "data": self.stats_data['combo'], "color": CYAN_400, "title": "COMBO ACHIEVED", "x_label": "Recent Words", "y_label": "Combo"},
+        ]
+
+    def get_stats_tab_rects(self, graph_x=None, graph_y=None, graph_w=None):
+        panel_rect = self.get_stats_panel_rect()
+        graph_x = panel_rect.x if graph_x is None else graph_x
+        graph_y = panel_rect.y if graph_y is None else graph_y
+        graph_w = panel_rect.width if graph_w is None else graph_w
+        tab_y = graph_y + 40
+        return {
+            "summary": pygame.Rect(graph_x + 20, tab_y, 110, 26),
+            "charts": pygame.Rect(graph_x + 138, tab_y, 84, 26),
+        }
+
+    def format_summary_cell(self, value):
+        if value is None:
+            return "-"
+        if abs(value - round(value)) < 0.01:
+            return str(int(round(value)))
+        return f"{value:.2f}"
+
+    def get_stat_profile(self, key):
+        data = self.stats_data.get(key, [])
+        if not data:
+            return None
+        mean = statistics.mean(data)
+        std = statistics.pstdev(data) if len(data) > 1 else 0.0
+        return {
+            "mean": mean,
+            "median": statistics.median(data),
+            "std": std,
+            "min": min(data),
+            "max": max(data),
+            "latest": data[-1],
+            "count": len(data),
+        }
+
+    def get_summary_highlights(self):
+        damage = self.get_stat_profile("damage")
+        time_profile = self.get_stat_profile("time")
+        keys = self.get_stat_profile("keys")
+        combo = self.get_stat_profile("combo")
+        attempts = self.get_stat_profile("attempts")
+
+        avg_time = time_profile["mean"] if time_profile else 0
+        avg_keys = keys["mean"] if keys else 0
+        avg_attempts = attempts["mean"] if attempts else 0
+        clutch_rate = 0
+        if self.stats_data["attempts"]:
+            clutch_rate = 100 * sum(1 for val in self.stats_data["attempts"] if val <= 3) / len(self.stats_data["attempts"])
+        typing_efficiency = min(100, max(0, (5 / avg_keys) * 100)) if avg_keys else 0
+        rhythm_score = 0
+        if time_profile and avg_time > 0:
+            rhythm_score = max(0, min(100, 100 - (time_profile["std"] / avg_time) * 100))
+
+        return [
+            {
+                "title": "Tempo",
+                "value": f"{avg_time:.1f}s" if time_profile else "-",
+                "subtitle": f"Fastest word {time_profile['min']:.1f}s" if time_profile else "No timing data",
+                "accent": GOLD,
+            },
+            {
+                "title": "Input Efficiency",
+                "value": f"{typing_efficiency:.0f}%" if keys else "-",
+                "subtitle": f"{avg_keys:.1f} keys per word" if keys else "No typing data",
+                "accent": EMERALD_500,
+            },
+            {
+                "title": "Clutch Rate",
+                "value": f"{clutch_rate:.0f}%" if attempts else "-",
+                "subtitle": f"{avg_attempts:.1f} attempts on average" if attempts else "No attempt data",
+                "accent": ACCENT_RED_GLOW,
+            },
+            {
+                "title": "Combo Peak",
+                "value": f"x{int(round(combo['max']))}" if combo else "-",
+                "subtitle": f"Average streak x{combo['mean']:.1f}" if combo else "No combo data",
+                "accent": CYAN_400,
+            },
+            {
+                "title": "Burst Damage",
+                "value": f"{damage['max']:.0f}" if damage else "-",
+                "subtitle": f"Average hit {damage['mean']:.1f}" if damage else "No damage data",
+                "accent": ACCENT_RED,
+            },
+            {
+                "title": "Rhythm Score",
+                "value": f"{rhythm_score:.0f}" if time_profile else "-",
+                "subtitle": "Higher means steadier pacing",
+                "accent": CYAN_400,
+            },
+        ]
+
+    def get_summary_insights(self):
+        damage = self.get_stat_profile("damage")
+        time_profile = self.get_stat_profile("time")
+        keys = self.get_stat_profile("keys")
+        combo = self.get_stat_profile("combo")
+        attempts = self.get_stat_profile("attempts")
+
+        insights = []
+        if damage:
+            insights.append({
+                "title": "Damage Pressure",
+                "accent": ACCENT_RED_GLOW,
+                "headline": f"{damage['mean']:.1f} avg / {damage['max']:.0f} peak",
+                "detail": f"Recent hit {damage['latest']:.0f} with spread {damage['std']:.1f}",
+            })
+        if time_profile and attempts:
+            clutch_rate = 100 * sum(1 for val in self.stats_data["attempts"] if val <= 3) / len(self.stats_data["attempts"])
+            insights.append({
+                "title": "Solve Control",
+                "accent": GOLD,
+                "headline": f"{attempts['mean']:.1f} attempts and {time_profile['mean']:.1f}s per word",
+                "detail": f"{clutch_rate:.0f}% of words land in 3 guesses or less",
+            })
+        if keys:
+            efficiency = min(100, max(0, (5 / keys["mean"]) * 100))
+            insights.append({
+                "title": "Typing Economy",
+                "accent": EMERALD_500,
+                "headline": f"{keys['mean']:.1f} keys per word",
+                "detail": f"Input efficiency sits at {efficiency:.0f}% with a best case of {keys['min']:.0f} keys",
+            })
+        if combo:
+            insights.append({
+                "title": "Momentum Window",
+                "accent": CYAN_400,
+                "headline": f"Average streak x{combo['mean']:.1f}, peak x{combo['max']:.0f}",
+                "detail": f"Current run ended on x{combo['latest']:.0f}" if combo["latest"] else "No current streak",
+            })
+        return insights[:3]
+
+    def draw_summary_dashboard(self, surface, panel_x, panel_y, panel_w, panel_h):
+        content_x = panel_x + 24
+        content_y = panel_y + 108
+        content_w = panel_w - 48
+
+        highlights = self.get_summary_highlights()
+        insights = self.get_summary_insights()
+
+        cols = 3
+        card_gap = 14
+        card_w = (content_w - card_gap * (cols - 1)) // cols
+        card_h = 74
+
+        for idx, card in enumerate(highlights):
+            col = idx % cols
+            row = idx // cols
+            rect = pygame.Rect(content_x + col * (card_w + card_gap), content_y + row * (card_h + 14), card_w, card_h)
+            bg = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+            pygame.draw.rect(bg, (10, 14, 24, 250), bg.get_rect(), border_radius=10)
+            pygame.draw.rect(bg, card["accent"], bg.get_rect(), 1, border_radius=10)
+            pygame.draw.rect(bg, (*card["accent"][:3], 28), pygame.Rect(0, 0, rect.width, 6), border_radius=10)
+            surface.blit(bg, rect.topleft)
+
+            surface.blit(self.tiny_font.render(card["title"].upper(), True, TEXT_DIM), (rect.x + 14, rect.y + 12))
+            surface.blit(self.name_font.render(card["value"], True, WHITE), (rect.x + 14, rect.y + 26))
+            surface.blit(self.tiny_font.render(card["subtitle"], True, card["accent"]), (rect.x + 14, rect.y + 54))
+
+        section_y = content_y + (card_h + 14) * 2 + 12
+        surface.blit(self.tiny_font.render("COMBAT READOUT", True, GOLD_LIGHT), (content_x, section_y))
+
+        row_y = section_y + 18
+        row_h = 42
+        row_gap = 8
+        for idx, insight in enumerate(insights):
+            rect = pygame.Rect(content_x, row_y + idx * (row_h + row_gap), content_w, row_h)
+            pygame.draw.rect(surface, (9, 12, 22), rect, border_radius=10)
+            pygame.draw.rect(surface, (36, 44, 64), rect, 1, border_radius=10)
+            pygame.draw.rect(surface, insight["accent"], pygame.Rect(rect.x, rect.y, 6, rect.height), border_radius=10)
+
+            surface.blit(self.small_font.render(insight["title"], True, WHITE), (rect.x + 18, rect.y + 4))
+            summary_line = self.tiny_font.render(f"{insight['headline']}  |  {insight['detail']}", True, insight["accent"])
+            surface.blit(summary_line, (rect.x + 18, rect.y + 22))
+
+    def get_stats_chart_at_pos(self, pos):
+        if not self.show_inventory:
+            return None
+        px, py = pos
+        for spec in self.get_stats_chart_specs():
+            if pygame.Rect(spec["x"], spec["y"], spec["w"], spec["h"]).collidepoint(px, py):
+                return spec["key"]
+        return None
+
+    def get_expanded_graph_spec(self):
+        if not self.expanded_graph_key:
+            return None
+        for spec in self.get_stats_chart_specs():
+            if spec["key"] == self.expanded_graph_key:
+                return spec
+        return None
+
+    def get_expanded_graph_panel_rect(self):
+        panel_w = min(620, self.screen_width - 64)
+        panel_h = min(420, self.screen_height - 80)
+        return pygame.Rect((self.screen_width - panel_w) // 2, (self.screen_height - panel_h) // 2, panel_w, panel_h)
+
+    def get_expanded_graph_close_rect(self):
+        panel_rect = self.get_expanded_graph_panel_rect()
+        return pygame.Rect(panel_rect.right - 38, panel_rect.y + 10, 24, 24)
+
+    def get_expanded_summary_panel_rect(self):
+        panel_w = min(720, self.screen_width - 48)
+        panel_h = min(470, self.screen_height - 64)
+        return pygame.Rect((self.screen_width - panel_w) // 2, (self.screen_height - panel_h) // 2, panel_w, panel_h)
+
+    def get_expanded_summary_close_rect(self):
+        panel_rect = self.get_expanded_summary_panel_rect()
+        return pygame.Rect(panel_rect.right - 38, panel_rect.y + 10, 24, 24)
+
+    def draw_expanded_graph_overlay(self, surface):
+        spec = self.get_expanded_graph_spec()
+        if not spec:
+            return
+
+        mx, my = pygame.mouse.get_pos()
+        overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 210))
+        surface.blit(overlay, (0, 0))
+
+        panel_rect = self.get_expanded_graph_panel_rect()
+        close_rect = self.get_expanded_graph_close_rect()
+        panel = pygame.Surface((panel_rect.width, panel_rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(panel, (15, 18, 30, 245), panel.get_rect(), border_radius=8)
+        pygame.draw.rect(panel, spec["color"], panel.get_rect(), 2, border_radius=8)
+        surface.blit(panel, panel_rect.topleft)
+
+        surface.blit(self.small_font.render(spec["title"], True, spec["color"]), (panel_rect.x + 24, panel_rect.y + 20))
+        hint = self.tiny_font.render("ESC or click outside to close", True, TEXT_DIM)
+        surface.blit(hint, (panel_rect.x + 24, panel_rect.y + 52))
+
+        hover_close = close_rect.collidepoint(mx, my)
+        pygame.draw.rect(surface, ACCENT_RED_GLOW if hover_close else ACCENT_RED, close_rect, border_radius=4)
+        pygame.draw.rect(surface, WHITE, close_rect, 1, border_radius=4)
+        close_text = self.btn_font.render("X", True, WHITE)
+        surface.blit(close_text, close_text.get_rect(center=close_rect.center))
+
+        chart_x = panel_rect.x + 24
+        chart_y = panel_rect.y + 92
+        chart_w = panel_rect.width - 48
+        chart_h = panel_rect.height - 124
+        if spec["kind"] == "line":
+            self.draw_line_chart(surface, chart_x, chart_y, chart_w, chart_h, spec["data"], spec["color"], spec["title"], mx, my, spec["x_label"], spec["y_label"])
+        else:
+            self.draw_bar_chart(surface, chart_x, chart_y, chart_w, chart_h, spec["data"], spec["color"], spec["title"], mx, my, spec["x_label"], spec["y_label"])
+
+    def draw_expanded_summary_overlay(self, surface):
+        mx, my = pygame.mouse.get_pos()
+        overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+        overlay.fill((3, 5, 10, 245))
+        surface.blit(overlay, (0, 0))
+
+        panel_rect = self.get_expanded_summary_panel_rect()
+        close_rect = self.get_expanded_summary_close_rect()
+        panel = pygame.Surface((panel_rect.width, panel_rect.height), pygame.SRCALPHA)
+        pygame.draw.rect(panel, (8, 11, 20, 254), panel.get_rect(), border_radius=8)
+        pygame.draw.rect(panel, (16, 21, 34, 255), pygame.Rect(14, 14, panel_rect.width - 28, panel_rect.height - 28), border_radius=8)
+        pygame.draw.rect(panel, CYAN_400, panel.get_rect(), 2, border_radius=8)
+        surface.blit(panel, panel_rect.topleft)
+
+        surface.blit(self.small_font.render("PERFORMANCE SNAPSHOT", True, CYAN_400), (panel_rect.x + 24, panel_rect.y + 20))
+        hint = self.tiny_font.render("ESC or click outside to close", True, TEXT_DIM)
+        surface.blit(hint, (panel_rect.x + 24, panel_rect.y + 52))
+
+        hover_close = close_rect.collidepoint(mx, my)
+        pygame.draw.rect(surface, ACCENT_RED_GLOW if hover_close else ACCENT_RED, close_rect, border_radius=4)
+        pygame.draw.rect(surface, WHITE, close_rect, 1, border_radius=4)
+        close_text = self.btn_font.render("X", True, WHITE)
+        surface.blit(close_text, close_text.get_rect(center=close_rect.center))
+
+        subtitle = self.tiny_font.render("Signal-focused readout from recent gameplay logs", True, GOLD_LIGHT)
+        surface.blit(subtitle, (panel_rect.x + 24, panel_rect.y + 76))
+        self.draw_summary_dashboard(surface, panel_rect.x, panel_rect.y, panel_rect.width, panel_rect.height)
+
+    def get_settings_layout(self):
+        box_w, box_h = 460, 420
+        bx = 400 - box_w//2
+        by = 100
+        inner_left = bx + 32
+        inner_right = bx + box_w - 32
+        percent_w = 50
+        control_gap = 14
+        control_w = 132
+        percent_x = inner_right - percent_w
+        control_right = percent_x - control_gap
+        control_x = control_right - control_w
+
+        slider_rect = pygame.Rect(control_x, by + 108, control_w, 16)
+        percent_pos = (percent_x, by + 106)
+        shake_rect = pygame.Rect(control_x - 8, by + 180, control_w, 32)
+        pause_resume_rect = pygame.Rect(inner_left, by + 270, inner_right - inner_left, 44)
+        pause_quit_rect = pygame.Rect(inner_left, by + 345, inner_right - inner_left, 44)
+        back_rect = pygame.Rect(inner_left, by + 345, inner_right - inner_left, 44)
+        return {
+            "box": pygame.Rect(bx, by, box_w, box_h),
+            "slider": slider_rect,
+            "percent_pos": percent_pos,
+            "shake": shake_rect,
+            "resume": pause_resume_rect,
+            "quit": pause_quit_rect,
+            "back": back_rect,
+            "music_label_pos": (inner_left, by + 105),
+            "shake_label_pos": (inner_left, by + 181),
+        }
 
     def draw_inventory_ui(self, surface):
         slot_size = 40
@@ -1261,8 +1692,9 @@ class PygameApp:
                 thumb_y = sb_y + int((self.inv_scroll / max_scroll) * (sb_h - thumb_h))
                 pygame.draw.rect(surface, GOLD_DIM, (sb_x, thumb_y, 10, thumb_h))
 
-            graph_x, graph_y = 400, 50
-            graph_w, graph_h = 360, 480
+            stats_panel = self.get_stats_panel_rect()
+            graph_x, graph_y = stats_panel.x, stats_panel.y
+            graph_w, graph_h = stats_panel.width, stats_panel.height
             
             g_surf = pygame.Surface((graph_w, graph_h), pygame.SRCALPHA)
             pygame.draw.rect(g_surf, (15, 18, 30, 200), g_surf.get_rect())
@@ -1270,15 +1702,34 @@ class PygameApp:
             surface.blit(g_surf, (graph_x, graph_y))
             
             surface.blit(self.small_font.render("GAMEPLAY STATISTICS", True, CYAN_400), (graph_x + 20, graph_y + 15))
-            
-            gx = graph_x + 20
-            gw = graph_w - 40
-            gh = 90
-            
-            self.draw_line_chart(surface, gx, graph_y + 45, gw, gh, self.stats_data['damage'], ACCENT_RED_GLOW, "DAMAGE PER TURN (TREND)", mx, my)
-            self.draw_bar_chart(surface, gx, graph_y + 145, gw, gh, self.stats_data['time'], GOLD, "TIME TAKEN PER WORD (SEC)", mx, my)
-            self.draw_line_chart(surface, gx, graph_y + 245, gw, gh, self.stats_data['keys'], EMERALD_500, "KEYSTROKES PER WORD", mx, my)
-            self.draw_bar_chart(surface, gx, graph_y + 345, gw, gh, self.stats_data['combo'], CYAN_400, "COMBO ACHIEVED", mx, my)
+            tab_rects = self.get_stats_tab_rects(graph_x, graph_y, graph_w)
+            for mode, rect in tab_rects.items():
+                active = self.expanded_summary if mode == "summary" else (self.stats_view_mode == "charts" and not self.expanded_summary)
+                fill = (22, 28, 46, 230) if active else (14, 18, 30, 200)
+                border = CYAN_400 if active else BORDER_SUBTLE
+                pygame.draw.rect(surface, fill, rect, border_radius=6)
+                pygame.draw.rect(surface, border, rect, 1, border_radius=6)
+                label = "SUMMARIZE" if mode == "summary" else "CHARTS"
+                text_color = CYAN_400 if active else TEXT_SECONDARY
+                txt = self.tiny_font.render(label, True, text_color)
+                surface.blit(txt, (rect.centerx - txt.get_width() // 2, rect.y + 7))
+
+            surface.blit(self.tiny_font.render("CLICK A GRAPH TO EXPAND", True, TEXT_DIM), (graph_x + 20, graph_y + 76))
+
+            for spec in self.get_stats_chart_specs(graph_x, graph_y, graph_w, graph_h):
+                rect = pygame.Rect(spec["x"], spec["y"], spec["w"], spec["h"])
+                hovered = rect.collidepoint(mx, my)
+                if spec["kind"] == "line":
+                    self.draw_line_chart(surface, spec["x"], spec["y"], spec["w"], spec["h"], spec["data"], spec["color"], spec["title"], mx, my, spec["x_label"], spec["y_label"])
+                else:
+                    self.draw_bar_chart(surface, spec["x"], spec["y"], spec["w"], spec["h"], spec["data"], spec["color"], spec["title"], mx, my, spec["x_label"], spec["y_label"])
+                if hovered:
+                    pygame.draw.rect(surface, spec["color"], rect, 2)
+
+            if self.expanded_graph_key:
+                self.draw_expanded_graph_overlay(surface)
+            if self.expanded_summary:
+                self.draw_expanded_summary_overlay(surface)
             
         start_x_hb = (800 - (5 * slot_size + 4 * padding)) // 2
         for i in range(5):
@@ -1298,6 +1749,12 @@ class PygameApp:
         if self.dragged_item:
             surface.blit(self.item_icons[self.dragged_item['id']], (mx - 16, my - 16))
 
+    def update_bgm_volume_from_pos(self, mouse_x):
+        slider = self.get_settings_layout()["slider"]
+        ratio = (mouse_x - slider.x) / max(1, slider.width)
+        self.bgm_volume = max(0.0, min(1.0, ratio))
+        pygame.mixer.music.set_volume(self.bgm_volume)
+
     def draw_settings(self):
         if self.state == STATE_PAUSE:
             self.draw_overworld()
@@ -1308,9 +1765,9 @@ class PygameApp:
             self.screen.fill(BG_DEEP)
             self.draw_particles()
             
-        box_w, box_h = 460, 420
-        bx = 400 - box_w//2
-        by = 100
+        layout = self.get_settings_layout()
+        box = layout["box"]
+        bx, by, box_w, box_h = box.x, box.y, box.width, box.height
         
         s = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
         pygame.draw.rect(s, (15, 18, 30, 190), s.get_rect())
@@ -1322,35 +1779,45 @@ class PygameApp:
         
         mx, my = pygame.mouse.get_pos()
         
-        self.screen.blit(self.btn_font.render("MUSIC VOLUME", True, TEXT_SECONDARY), (210, 208))
+        self.screen.blit(self.btn_font.render("MUSIC VOLUME", True, TEXT_SECONDARY), layout["music_label_pos"])
+
+        slider = layout["slider"]
+        slider_hover = slider.inflate(0, 16).collidepoint(mx, my) or self.dragging_volume_slider
+        track_rect = pygame.Rect(slider.x, slider.y + 3, slider.width, 10)
+        glow_rect = track_rect.inflate(10, 8)
+        pygame.draw.rect(self.screen, (18, 20, 34), glow_rect, border_radius=10)
+        pygame.draw.rect(self.screen, (24, 26, 40), track_rect, border_radius=8)
+        pygame.draw.rect(self.screen, (48, 54, 78) if slider_hover else (38, 42, 62), track_rect, 1, border_radius=8)
+        fill_w = int(track_rect.width * self.bgm_volume)
+        if fill_w > 0:
+            fill_rect = pygame.Rect(track_rect.x, track_rect.y, max(10, fill_w), track_rect.height)
+            pygame.draw.rect(self.screen, GOLD, fill_rect, border_radius=8)
+        knob_x = track_rect.x + int(track_rect.width * self.bgm_volume)
+        knob_x = max(track_rect.x + 8, min(track_rect.right - 8, knob_x))
+        knob_radius = 9 if slider_hover else 8
+        pygame.draw.circle(self.screen, GOLD_LIGHT, (knob_x, track_rect.centery), knob_radius)
+        pygame.draw.circle(self.screen, (255, 245, 200), (knob_x, track_rect.centery), 3)
+        percent_surf = self.small_font.render(f"{int(self.bgm_volume*100)}%", True, GOLD_LIGHT)
+        self.screen.blit(percent_surf, (layout["percent_pos"][0] + 50 - percent_surf.get_width(), layout["percent_pos"][1]))
         
-        b1 = pygame.Rect(370, 200, 35, 35)
-        pygame.draw.rect(self.screen, (51, 65, 85) if b1.collidepoint(mx, my) else (30, 41, 59), b1)
-        self.screen.blit(self.font.render("-", True, WHITE), (382, 204))
+        self.screen.blit(self.btn_font.render("SCREEN SHAKE", True, TEXT_SECONDARY), layout["shake_label_pos"])
         
-        pygame.draw.rect(self.screen, (30, 30, 40), (415, 212, 100, 10))
-        pygame.draw.rect(self.screen, GOLD, (415, 212, int(100 * self.bgm_volume), 10))
-        
-        b2 = pygame.Rect(525, 200, 35, 35)
-        pygame.draw.rect(self.screen, (51, 65, 85) if b2.collidepoint(mx, my) else (30, 41, 59), b2)
-        self.screen.blit(self.font.render("+", True, WHITE), (535, 204))
-        self.screen.blit(self.small_font.render(f"{int(self.bgm_volume*100)}%", True, GOLD_LIGHT), (575, 208))
-        
-        self.screen.blit(self.btn_font.render("SCREEN SHAKE", True, TEXT_SECONDARY), (210, 288))
-        
-        sb = pygame.Rect(410, 280, 190, 35)
+        sb = layout["shake"]
         shover = sb.collidepoint(mx, my)
         pygame.draw.rect(self.screen, BG_DARK if not shover else (30, 41, 59), sb)
         pygame.draw.rect(self.screen, GOLD if self.shake_enabled else TEXT_DIM, sb, 1)
         s_txt = "ON" if self.shake_enabled else "OFF"
         t_col = GOLD_LIGHT if self.shake_enabled else TEXT_DIM
-        self.screen.blit(self.small_font.render(s_txt, True, t_col), (505 - self.small_font.size(s_txt)[0]//2, 288))
+        self.screen.blit(self.small_font.render(s_txt, True, t_col), (sb.centerx - self.small_font.size(s_txt)[0]//2, sb.y + 8))
         
         if self.state == STATE_PAUSE:
-            self.draw_styled_btn("RESUME", 250, 370, 300, 45, pygame.Rect(250, 370, 300, 45).collidepoint(mx, my))
-            self.draw_styled_btn("SAVE & QUIT", 250, 430, 300, 45, pygame.Rect(250, 430, 300, 45).collidepoint(mx, my), True)
+            resume = layout["resume"]
+            quit_btn = layout["quit"]
+            self.draw_styled_btn("RESUME", resume.x, resume.y, resume.width, resume.height, resume.collidepoint(mx, my))
+            self.draw_styled_btn("SAVE & QUIT", quit_btn.x, quit_btn.y, quit_btn.width, quit_btn.height, quit_btn.collidepoint(mx, my), True)
         else:
-            self.draw_styled_btn("BACK", 250, 430, 300, 45, pygame.Rect(250, 430, 300, 45).collidepoint(mx, my))
+            back = layout["back"]
+            self.draw_styled_btn("BACK", back.x, back.y, back.width, back.height, back.collidepoint(mx, my))
 
     def draw_category_ui(self, cat, start_x, start_y):
         opts = self.options[cat]
