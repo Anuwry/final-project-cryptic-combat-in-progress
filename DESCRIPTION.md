@@ -59,6 +59,8 @@ This separates concerns such as setup, rendering, event handling, world gameplay
 
 **Diagram File:** `diagram_uml.pdf`
 
+[diagram_uml.pdf](https://github.com/user-attachments/files/26949598/diagram_uml.pdf)
+
 The UML class diagram documents major classes, responsibilities, and key relationships across gameplay, data, and rendering systems
 
 ### 3.1 Main Structural Groups
