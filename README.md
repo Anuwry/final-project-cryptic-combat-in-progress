@@ -116,10 +116,12 @@ cryptic_combat/
 |   `-- sounds/
 |-- data/
 |   |-- raw/
-|   |-- session/
+|   |-- maps/
 |   |-- slots/
 |   `-- words/
-|-- docs/
+|-- screenshots/
+|   |-- gameplay/
+|   `-- visualization/
 |-- src/
 |   |-- app/
 |   |   |-- app_setup_mixin.py
@@ -138,6 +140,10 @@ cryptic_combat/
 |   |-- game_manager.py
 |   |-- map_loader.py
 |   `-- mechanics.py
+|-- cryptic-combat-project-proposal.pdf
+|-- DESCRIPTION.md
+|-- diagram_uml.pdf
+|-- LICENSE
 |-- main.py
 |-- map_editor.py
 |-- README.md
