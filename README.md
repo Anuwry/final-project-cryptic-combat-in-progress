@@ -4,7 +4,7 @@ Cryptic Combat
 
 # Project Description
 
-Cryptic Combat is a Python + Pygame word-combat roguelike where the player explores connected realms, fights myth-themed enemies through word guessing, manages items, and progresses through battle rewards and map traversal.
+Cryptic Combat is a Python + Pygame word-combat roguelike where the player explores connected realms, fights myth-themed enemies through word guessing, manages items, and progresses through battle rewards and map traversal
 
 # Installation / Running Guide
 
@@ -16,7 +16,7 @@ Cryptic Combat is a Python + Pygame word-combat roguelike where the player explo
 
 ## Windows
 
-1. Open PowerShell in the project root.
+1. Open PowerShell in the project root
 2. Create a virtual environment:
 
 ```powershell
@@ -39,12 +39,6 @@ pip install -r requirements.txt
 
 ```powershell
 python main.py
-```
-
-6. Optional: run the map editor:
-
-```powershell
-python map_editor.py
 ```
 
 ## Mac
@@ -72,12 +66,6 @@ pip install -r requirements.txt
 
 ```bash
 python3 main.py
-```
-
-6. Optional: run the map editor:
-
-```bash
-python3 map_editor.py
 ```
 
 # Tutorial / Usage
