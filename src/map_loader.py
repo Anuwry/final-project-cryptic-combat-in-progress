@@ -25,6 +25,8 @@ class MapObject:
         
         if self.type in ['house_red', 'house_grey']:
             self.rect = pygame.Rect(x, y, 192, 192) 
+        elif self.type == 'shop':
+            self.rect = pygame.Rect(x + 28, y + 86, 200, 54)
         elif self.type in ['tree_green', 'tree_orange']:
             self.rect = pygame.Rect(x + 16, y + 64, 32, 64) 
         elif self.type == 'statue':
@@ -74,6 +76,19 @@ class MapObject:
                         return
                     except: pass
             print(f"Missing statue image for: {god} {role}")
+        elif self.type == "shop":
+            for fname in ("shop_transparent.png", "shop.png"):
+                path = os.path.join(BASE_DIR, "assets", "images", fname)
+                if os.path.exists(path):
+                    try:
+                        img = pygame.image.load(path).convert_alpha()
+                        target_w = 256
+                        target_h = max(64, int(img.get_height() * (target_w / img.get_width())))
+                        self.image = pygame.transform.smoothscale(img, (target_w, target_h))
+                        return
+                    except Exception:
+                        pass
+            print("Missing shop image")
 
     def get_collision_rect(self):
         return self.rect
@@ -164,7 +179,10 @@ class GameMap:
             self.tile_size = data.get('tile_size', 64)
             self.grid = data['grid']
             self.spawn_point = data.get('spawn_point', [100, 100])
-            self.objects = [MapObject(o['x'], o['y'], o['type'], o.get('data', {}), o.get('collected', False)) for o in data.get('objects', [])]
+            self.objects = [
+                MapObject(o['x'], o['y'], o['type'], o.get('data', {}), o.get('collected', False))
+                for o in data.get('objects', [])
+            ]
             for obj in self.objects:
                 if obj.type == 'statue' and obj.data.get('tier') == 'Boss':
                     self.god_theme = obj.data.get('god')
@@ -179,7 +197,7 @@ class GameMap:
         player_rect = pygame.Rect(x - 32, y - 32, 128, 128)
         safe_objects = []
         for obj in self.objects:
-            if obj.type in ['house_red', 'house_grey', 'tree_green', 'tree_orange']:
+            if obj.type in ['house_red', 'house_grey', 'shop', 'tree_green', 'tree_orange']:
                 if not obj.get_collision_rect().colliderect(player_rect):
                     safe_objects.append(obj)
             else:
@@ -212,14 +230,15 @@ class GameMap:
             else:
                 self.grid[4][x] = TileType.DIRT; self.grid[5][x] = TileType.DIRT
 
-        self.objects.append(MapObject(9 * 64, 6 * 64, "house_grey"))
+        self.objects.append(MapObject((16 * 64) + 16, 9 * 64, "shop", {
+            "name": "Merchant",
+            "dialogue": "Stock up before you leave Sanc."
+        }))
         self.objects.append(MapObject(20 * 64, 6 * 64, "house_red"))
         self.objects.append(MapObject(9 * 64, 17 * 64, "house_red"))
         self.objects.append(MapObject(20 * 64, 17 * 64, "house_grey"))
         self.objects.append(MapObject(15 * 64, 11 * 64, "statue", {"god": "Athena", "tier": "Follower"}))
         self.objects.append(MapObject(16 * 64, 11 * 64, "statue", {"god": "Apollo", "tier": "Follower"}))
-        self.objects.append(MapObject(15 * 64, 15 * 64, "npc", {"name": "Grand Elder", "dialogue": "Welcome!"}))
-        self.objects.append(MapObject(16 * 64, 10 * 64, "npc", {"name": "Merchant", "dialogue": "SHOP"}))
         self.spawn_point = [15 * 64, 15 * 64]
         self._populate_decorations()
 
@@ -304,7 +323,7 @@ class GameMap:
         if 0 <= gx < self.width and 0 <= gy < self.height:
             if self.grid[gy][gx] == TileType.WATER: return True
         for obj in self.objects:
-            if obj.type in ['house_red', 'house_grey', 'tree_green', 'tree_orange']:
+            if obj.type in ['house_red', 'house_grey', 'shop', 'tree_green', 'tree_orange']:
                 if check_rect.colliderect(obj.get_collision_rect()): return True
         return False
 
@@ -380,6 +399,8 @@ class GameMap:
                     offset_x = (self.tile_size - img_w) // 2
                     offset_y = (self.tile_size - img_h) 
                     surface.blit(obj.image, (sx + offset_x, sy + offset_y))
+                elif obj.type == 'shop':
+                    surface.blit(obj.image, (sx, sy))
                 else:
                     bob = math.sin(current_time * 3 + obj.x) * 5
                     surface.blit(obj.image, (sx, sy + bob))
@@ -397,3 +418,4 @@ class GameMap:
                 else:
                     pygame.draw.rect(surface, (100, 100, 100), (sx, sy, 64, 64))
                     pygame.draw.rect(surface, (255, 50, 50), (sx, sy, 64, 64), 2)
+
