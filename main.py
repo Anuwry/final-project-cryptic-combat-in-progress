@@ -5,6 +5,7 @@ import math
 import random
 import json
 import time
+import csv
 from src.config import DATA_DIR, RAW_DATA_DIR, WORDS_DATA_DIR, BASE_DIR
 from src.game_manager import GameManager
 from src.entities import Player, Enemy
@@ -111,7 +112,6 @@ class PygameApp:
         
         self.saves = {"1": None, "2": None, "3": None}
         self.current_save_slot = None
-        self.save_mode = 'new' 
         self.load_saves_metadata()
         
         self.state = STATE_MAIN_MENU
@@ -121,10 +121,13 @@ class PygameApp:
         self.board = TileBoard()
         
         self.item_icons = {}
-        self.inventory = [None] * 20
+        self.inventory = [None] * 50
         self.show_inventory = False
+        self.inv_scroll = 0
         self.dragged_item = None
         self.dragged_from_idx = -1
+        
+        self.stats_data = {'time': [], 'attempts': [], 'combo': [], 'damage': [], 'keys': []}
         
         self.setup_assets()
         self.setup_selection()
@@ -188,6 +191,22 @@ class PygameApp:
         
         self.setup_overworld()
 
+    def load_stats_csv(self):
+        self.stats_data = {'time': [], 'attempts': [], 'combo': [], 'damage': [], 'keys': []}
+        path = os.path.join(BASE_DIR, "data", "raw", "gameplay_stats.csv")
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        self.stats_data['time'].append(float(row.get('time_taken_per_word', 0)))
+                        self.stats_data['attempts'].append(float(row.get('attempts_per_word', 0)))
+                        self.stats_data['combo'].append(float(row.get('combo_achieved', 0)))
+                        self.stats_data['damage'].append(float(row.get('damage_per_turn', 0)))
+                        self.stats_data['keys'].append(float(row.get('keystrokes_per_word', 0)))
+            except Exception as e:
+                print(f"Error loading stats CSV: {e}")
+
     def load_saves_metadata(self):
         path = os.path.join(BASE_DIR, "data", "saves.json")
         if os.path.exists(path):
@@ -225,7 +244,11 @@ class PygameApp:
         self.base_atk = data.get("base_atk", 15)
         self.player = Player(hp=data.get("hp", 100), base_attack=self.base_atk)
         self.gold = data.get("gold", 50)
-        self.inventory = data.get("inventory", [None]*20)
+        
+        loaded_inv = data.get("inventory", [None]*50)
+        while len(loaded_inv) < 50: loaded_inv.append(None)
+        self.inventory = loaded_inv
+        
         self.realm_x = data.get("realm_x", 0)
         self.realm_y = data.get("realm_y", 0)
         self.map_player_pos = data.get("pos", [15*64, 15*64])
@@ -233,6 +256,7 @@ class PygameApp:
         self.selections = data.get("selections", {k: 0 for k in self.tabs})
         self.current_level = data.get("level", 1)
         self.generated_boss_levels = set(data.get("generated_bosses", []))
+        self.inv_scroll = 0
         
         self.update_player_visuals()
         self.game_map = GameMap(self.realm_x, self.realm_y)
@@ -253,7 +277,8 @@ class PygameApp:
         self.player_max_hp = 100
         self.player = Player(hp=self.player_max_hp, base_attack=self.base_atk)
         self.show_inventory = False
-        self.inventory = [None] * 20
+        self.inv_scroll = 0
+        self.inventory = [None] * 50
         self.add_item('compass', 'Warp Scroll', 'Teleports you safely', 1)
         self.add_item('potion', 'Health Potion', 'Heals 50 HP', 2)
         self.add_item('scroll', 'Hint Scroll', 'Reveals 1 letter', 3) 
@@ -262,7 +287,6 @@ class PygameApp:
         self.last_normal_realm = (0, 0)
         self.defeated_bosses = {}
         self.selections = {k: 0 for k in self.tabs}
-        self.generated_boss_levels = set()
         self.update_player_visuals()
 
     def start_new_game(self, slot):
@@ -556,16 +580,24 @@ class PygameApp:
         mx, my = pos
         slot_size = 40
         padding = 6
-        start_x = (800 - (5 * slot_size + 4 * padding)) // 2
+        
+        start_x_hb = (800 - (5 * slot_size + 4 * padding)) // 2
         hotbar_start_y = 540
         for i in range(5):
-            if pygame.Rect(start_x + i * (slot_size + padding), hotbar_start_y, slot_size, slot_size).collidepoint(mx, my): return i
+            if pygame.Rect(start_x_hb + i * (slot_size + padding), hotbar_start_y, slot_size, slot_size).collidepoint(mx, my): return i
+            
         if self.show_inventory:
-            inv_start_y = hotbar_start_y - (3 * (slot_size + padding)) - 10
-            for i in range(15):
+            panel_x, panel_y = 40, 50
+            panel_w = 340
+            start_x_inv = panel_x + (panel_w - (5 * slot_size + 4 * padding)) // 2
+            inv_start_y = panel_y + 90
+            
+            for i in range(40): 
                 r, c = i // 5, i % 5
-                idx = i + 5
-                if pygame.Rect(start_x + c * (slot_size + padding), inv_start_y + r * (slot_size + padding), slot_size, slot_size).collidepoint(mx, my): return idx
+                idx = 5 + (self.inv_scroll * 5) + i
+                if idx < len(self.inventory):
+                    if pygame.Rect(start_x_inv + c * (slot_size + padding), inv_start_y + r * (slot_size + padding), slot_size, slot_size).collidepoint(mx, my): 
+                        return idx
         return None
 
     def get_nearby_interactables(self, p_rect, dist=50):
@@ -584,20 +616,40 @@ class PygameApp:
                 if hasattr(self, 'game_map'): self.game_map.save_map()
                 self.save_game_data()
                 pygame.quit(); sys.exit()
+                
+            elif event.type == pygame.MOUSEWHEEL:
+                if self.state == STATE_OVERWORLD and self.show_inventory:
+                    self.inv_scroll -= event.y
+                    max_scroll = max(0, ((len(self.inventory) - 5) // 5) - 8)
+                    self.inv_scroll = max(0, min(self.inv_scroll, max_scroll))
             
             if self.state == STATE_MAIN_MENU:
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mx, my = event.pos
-                    if pygame.Rect(250, 260, 300, 55).collidepoint(mx, my):
-                        self.save_mode = 'new'
-                        self.state = STATE_SAVE_SLOTS
-                    elif pygame.Rect(250, 330, 300, 55).collidepoint(mx, my):
-                        self.save_mode = 'load'
-                        self.state = STATE_SAVE_SLOTS
-                    elif pygame.Rect(250, 400, 300, 55).collidepoint(mx, my):
-                        self.state = STATE_SETTINGS
-                    elif pygame.Rect(250, 470, 300, 55).collidepoint(mx, my):
-                        pygame.quit(); sys.exit()
+                    empty_slots = [i for i in range(1, 4) if not self.saves[str(i)]]
+                    
+                    btn_rects = {}
+                    if empty_slots:
+                        btn_rects["NEW GAME"] = pygame.Rect(250, 260, 300, 55)
+                        btn_rects["LOAD GAME"] = pygame.Rect(250, 330, 300, 55)
+                        btn_rects["SETTINGS"] = pygame.Rect(250, 400, 300, 55)
+                        btn_rects["EXIT"] = pygame.Rect(250, 470, 300, 55)
+                    else:
+                        btn_rects["LOAD GAME"] = pygame.Rect(250, 260, 300, 55)
+                        btn_rects["SETTINGS"] = pygame.Rect(250, 330, 300, 55)
+                        btn_rects["EXIT"] = pygame.Rect(250, 400, 300, 55)
+
+                    for text, rect in btn_rects.items():
+                        if rect.collidepoint(mx, my):
+                            if text == "NEW GAME":
+                                self.start_new_game(empty_slots[0]) 
+                            elif text == "LOAD GAME":
+                                self.save_mode = 'load'
+                                self.state = STATE_SAVE_SLOTS
+                            elif text == "SETTINGS":
+                                self.state = STATE_SETTINGS
+                            elif text == "EXIT":
+                                pygame.quit(); sys.exit()
                         
             elif self.state == STATE_SAVE_SLOTS:
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
@@ -608,19 +660,19 @@ class PygameApp:
                         self.state = STATE_MAIN_MENU
                         
                     for i in range(1, 4):
-                        slot_rect = pygame.Rect(150, 100 + (i-1)*130, 450, 110)
-                        del_rect = pygame.Rect(620, 100 + (i-1)*130 + 30, 50, 50)
+                        data = self.saves[str(i)]
+                        y = 100 + (i-1)*130
+                        slot_rect = pygame.Rect(150, y, 500, 110)
+                        del_rect = pygame.Rect(150 + 500 - 45, y + 35, 40, 40)
                         
-                        if del_rect.collidepoint(mx, my) and self.saves[str(i)]:
+                        if data and del_rect.collidepoint(mx, my):
                             self.saves[str(i)] = None
                             path = os.path.join(BASE_DIR, "data", "saves.json")
                             with open(path, 'w') as f: json.dump(self.saves, f)
                             
                         elif slot_rect.collidepoint(mx, my):
-                            if self.save_mode == 'load' and self.saves[str(i)]: 
+                            if self.saves[str(i)]: 
                                 self.load_game_data(i)
-                            elif self.save_mode == 'new': 
-                                self.start_new_game(i)
 
             elif self.state in [STATE_SETTINGS, STATE_PAUSE]:
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
@@ -716,6 +768,8 @@ class PygameApp:
                                     self.dialogue_timer = 180  
                         elif event.key == pygame.K_e:
                             self.show_inventory = not self.show_inventory
+                            if self.show_inventory:
+                                self.load_stats_csv()
                         elif pygame.K_1 <= event.key <= pygame.K_5:
                             self.use_item(event.key - pygame.K_1)
 
@@ -983,17 +1037,31 @@ class PygameApp:
         self.screen.blit(sub, (self.screen_width//2 - sub.get_width()//2, 170))
         
         mx, my = pygame.mouse.get_pos()
-        btns = [("NEW GAME", 260), ("LOAD GAME", 330), ("SETTINGS", 400), ("EXIT", 470)]
-        for text, y in btns:
-            is_hover = pygame.Rect(250, y, 300, 55).collidepoint(mx, my)
-            self.draw_styled_btn(text, 250, y, 300, 55, is_hover, text=="EXIT")
+        
+        empty_slots = [i for i in range(1, 4) if not self.saves[str(i)]]
+        btn_rects = {}
+        
+        if empty_slots:
+            btn_rects["NEW GAME"] = pygame.Rect(250, 260, 300, 55)
+            btn_rects["LOAD GAME"] = pygame.Rect(250, 330, 300, 55)
+            btn_rects["SETTINGS"] = pygame.Rect(250, 400, 300, 55)
+            btn_rects["EXIT"] = pygame.Rect(250, 470, 300, 55)
+        else:
+            btn_rects["LOAD GAME"] = pygame.Rect(250, 260, 300, 55)
+            btn_rects["SETTINGS"] = pygame.Rect(250, 330, 300, 55)
+            btn_rects["EXIT"] = pygame.Rect(250, 400, 300, 55)
+            
+        for text, rect in btn_rects.items():
+            is_hover = rect.collidepoint(mx, my)
+            self.draw_styled_btn(text, rect.x, rect.y, rect.width, rect.height, is_hover, text=="EXIT")
 
     def draw_save_slots(self):
         self.screen.fill(BG_DEEP)
         self.draw_particles()
         
-        title_txt = "SELECT SAVE SLOT" if self.save_mode == 'new' else "LOAD GAME"
-        self.screen.blit(self.name_font.render(title_txt, True, GOLD), (280, 40))
+        title_surf = self.name_font.render("CHARACTERS", True, GOLD)
+        title_x = (self.screen_width // 2) - (title_surf.get_width() // 2)
+        self.screen.blit(title_surf, (title_x, 40))
         
         mx, my = pygame.mouse.get_pos()
         b_rect = pygame.Rect(20, 20, 100, 40)
@@ -1004,27 +1072,197 @@ class PygameApp:
         for i in range(1, 4):
             data = self.saves[str(i)]
             y = 100 + (i-1)*130
-            rect = pygame.Rect(150, y, 450, 110)
-            del_rect = pygame.Rect(620, y+30, 50, 50)
+            rect = pygame.Rect(150, y, 500, 110)
+            del_rect = pygame.Rect(150 + 500 - 45, y + 35, 40, 40) 
             
             hover = rect.collidepoint(mx, my)
-            slot_surf = pygame.Surface((450, 110), pygame.SRCALPHA)
+            slot_surf = pygame.Surface((500, 110), pygame.SRCALPHA)
             bg_col = (22, 25, 38, 240) if hover else (15, 18, 30, 200)
             pygame.draw.rect(slot_surf, bg_col, slot_surf.get_rect())
             pygame.draw.rect(slot_surf, GOLD if hover else BORDER_SUBTLE, slot_surf.get_rect(), 2)
             self.screen.blit(slot_surf, (150, y))
             
             if data:
-                self.screen.blit(self.name_font.render(f"SLOT {i} - Level {data.get('level', 1)}", True, GOLD), (180, y+25))
-                self.screen.blit(self.small_font.render(f"HP: {data.get('hp')}/{data.get('max_hp')} | ATK: {data.get('base_atk')} | {data.get('gold')} G", True, TEXT_PRIMARY), (180, y+65))
+                self.screen.blit(self.name_font.render(f"SLOT {i} - Level {data.get('level', 1)}", True, GOLD), (170, y+25))
+                self.screen.blit(self.small_font.render(f"HP: {data.get('hp')}/{data.get('max_hp')} | ATK: {data.get('base_atk')} | GOLD: {data.get('gold')}G", True, TEXT_PRIMARY), (170, y+65))
                 
                 d_hover = del_rect.collidepoint(mx, my)
                 pygame.draw.rect(self.screen, ACCENT_RED_GLOW if d_hover else ACCENT_RED, del_rect)
                 pygame.draw.rect(self.screen, WHITE, del_rect, 1)
-                self.screen.blit(self.font.render("X", True, WHITE), (del_rect.centerx-10, del_rect.centery-12))
+                self.screen.blit(self.btn_font.render("X", True, WHITE), (del_rect.centerx-7, del_rect.centery-10))
             else:
                 t = self.name_font.render(f"SLOT {i} - EMPTY", True, TEXT_DIM)
                 self.screen.blit(t, (rect.centerx - t.get_width()//2, rect.centery - t.get_height()//2))
+
+    def draw_line_chart(self, surface, x, y, w, h, data, color, title, mx, my):
+        pygame.draw.rect(surface, (20, 25, 40, 200), (x, y, w, h))
+        pygame.draw.rect(surface, BORDER_SUBTLE, (x, y, w, h), 1)
+        surface.blit(self.tiny_font.render(title, True, TEXT_PRIMARY), (x+5, y+5))
+        
+        if not data:
+            no_data = self.tiny_font.render("NO DATA", True, TEXT_DIM)
+            surface.blit(no_data, (x + w//2 - no_data.get_width()//2, y + h//2 - no_data.get_height()//2))
+            return
+            
+        data = data[-20:]
+        max_val = max(data) if max(data) > 0 else 1
+        pts = []
+        pad_x, pad_y = 15, 25
+        
+        hovered_val = None
+        hovered_pos = None
+
+        for i, val in enumerate(data):
+            px = x + pad_x + (i / max(1, len(data)-1)) * (w - 2*pad_x)
+            py = y + h - 5 - (val / max_val) * (h - pad_y - 10)
+            pts.append((px, py))
+            if math.hypot(mx - px, my - py) < 8:
+                hovered_val = val
+                hovered_pos = (px, py)
+            
+        if len(pts) > 1:
+            pygame.draw.lines(surface, color, False, pts, 2)
+        for px, py in pts:
+            pygame.draw.circle(surface, WHITE, (int(px), int(py)), 2)
+
+        if hovered_val is not None:
+            v_str = f"{round(hovered_val, 2)}"
+            ts = self.tiny_font.render(v_str, True, WHITE)
+            tr = ts.get_rect(center=(hovered_pos[0], hovered_pos[1] - 12))
+            pygame.draw.rect(surface, (0,0,0,220), tr.inflate(8, 4))
+            pygame.draw.rect(surface, GOLD, tr.inflate(8, 4), 1)
+            surface.blit(ts, tr)
+
+    def draw_bar_chart(self, surface, x, y, w, h, data, color, title, mx, my):
+        pygame.draw.rect(surface, (20, 25, 40, 200), (x, y, w, h))
+        pygame.draw.rect(surface, BORDER_SUBTLE, (x, y, w, h), 1)
+        surface.blit(self.tiny_font.render(title, True, TEXT_PRIMARY), (x+5, y+5))
+        
+        if not data:
+            no_data = self.tiny_font.render("NO DATA", True, TEXT_DIM)
+            surface.blit(no_data, (x + w//2 - no_data.get_width()//2, y + h//2 - no_data.get_height()//2))
+            return
+            
+        data = data[-20:]
+        max_val = max(data) if max(data) > 0 else 1
+        pad_x, pad_y = 15, 25
+        bar_w = max(2, (w - 2*pad_x) // len(data) - 2)
+        
+        hovered_val = None
+        hovered_pos = None
+
+        for i, val in enumerate(data):
+            px = x + pad_x + i * (bar_w + 2)
+            ph = (val / max_val) * (h - pad_y - 10)
+            py = y + h - 5 - ph
+            rect = pygame.Rect(px, py, bar_w, ph)
+            pygame.draw.rect(surface, color, rect)
+            
+            if rect.collidepoint(mx, my):
+                hovered_val = val
+                hovered_pos = (px + bar_w/2, py)
+
+        if hovered_val is not None:
+            v_str = f"{round(hovered_val, 2)}"
+            ts = self.tiny_font.render(v_str, True, WHITE)
+            tr = ts.get_rect(center=(hovered_pos[0], hovered_pos[1] - 12))
+            pygame.draw.rect(surface, (0,0,0,220), tr.inflate(8, 4))
+            pygame.draw.rect(surface, GOLD, tr.inflate(8, 4), 1)
+            surface.blit(ts, tr)
+
+    def draw_inventory_ui(self, surface):
+        slot_size = 40
+        padding = 6
+        hotbar_start_y = 540
+        slot_bg = BG_DARK 
+        border_color = BORDER_SUBTLE 
+        mx, my = pygame.mouse.get_pos()
+        
+        if self.show_inventory:
+            overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 220)) 
+            surface.blit(overlay, (0, 0))
+            
+            panel_x, panel_y = 40, 50
+            panel_w, panel_h = 340, 480
+            
+            p_surf = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+            pygame.draw.rect(p_surf, (15, 18, 30, 200), p_surf.get_rect())
+            pygame.draw.rect(p_surf, GOLD_DIM, p_surf.get_rect(), 2)
+            surface.blit(p_surf, (panel_x, panel_y))
+            
+            surface.blit(self.small_font.render("INVENTORY & STATS", True, GOLD), (panel_x + 20, panel_y + 15))
+            surface.blit(self.tiny_font.render(f"HP: {self.player.hp} / {self.player_max_hp}  |  ATK: {self.base_atk}", True, TEXT_PRIMARY), (panel_x + 20, panel_y + 45))
+            
+            grid_w = 5 * slot_size + 4 * padding
+            start_x_inv = panel_x + (panel_w - grid_w) // 2
+            inv_start_y = panel_y + 90
+            
+            for i in range(40): 
+                r, c = i // 5, i % 5
+                idx = 5 + (self.inv_scroll * 5) + i
+                
+                if idx < len(self.inventory):
+                    rect = pygame.Rect(start_x_inv + c * (slot_size + padding), inv_start_y + r * (slot_size + padding), slot_size, slot_size)
+                    
+                    s = pygame.Surface((slot_size, slot_size), pygame.SRCALPHA)
+                    pygame.draw.rect(s, slot_bg, s.get_rect()) 
+                    pygame.draw.rect(s, border_color, s.get_rect(), 1) 
+                    surface.blit(s, (rect.x, rect.y))
+                    
+                    item = self.inventory[idx]
+                    if item:
+                        surface.blit(self.item_icons[item['id']], (rect.x+4, rect.y+4))
+                        if item.get('qty', 1) > 1:
+                            surface.blit(self.tiny_font.render(str(item['qty']), True, WHITE), (rect.right-10, rect.bottom-12))
+
+            sb_x = start_x_inv + grid_w + 10
+            sb_y = inv_start_y
+            sb_h = 8 * slot_size + 7 * padding
+            pygame.draw.rect(surface, BG_DARK, (sb_x, sb_y, 10, sb_h))
+            
+            max_scroll = max(0, ((len(self.inventory) - 5) // 5) - 8)
+            if max_scroll > 0:
+                thumb_h = max(10, int(sb_h * (8 / (max_scroll + 8))))
+                thumb_y = sb_y + int((self.inv_scroll / max_scroll) * (sb_h - thumb_h))
+                pygame.draw.rect(surface, GOLD_DIM, (sb_x, thumb_y, 10, thumb_h))
+
+            graph_x, graph_y = 400, 50
+            graph_w, graph_h = 360, 480
+            
+            g_surf = pygame.Surface((graph_w, graph_h), pygame.SRCALPHA)
+            pygame.draw.rect(g_surf, (15, 18, 30, 200), g_surf.get_rect())
+            pygame.draw.rect(g_surf, CYAN_400, g_surf.get_rect(), 2)
+            surface.blit(g_surf, (graph_x, graph_y))
+            
+            surface.blit(self.small_font.render("GAMEPLAY STATISTICS", True, CYAN_400), (graph_x + 20, graph_y + 15))
+            
+            gx = graph_x + 20
+            gw = graph_w - 40
+            gh = 90
+            
+            self.draw_line_chart(surface, gx, graph_y + 45, gw, gh, self.stats_data['damage'], ACCENT_RED_GLOW, "DAMAGE PER TURN (TREND)", mx, my)
+            self.draw_bar_chart(surface, gx, graph_y + 145, gw, gh, self.stats_data['time'], GOLD, "TIME TAKEN PER WORD (SEC)", mx, my)
+            self.draw_line_chart(surface, gx, graph_y + 245, gw, gh, self.stats_data['keys'], EMERALD_500, "KEYSTROKES PER WORD", mx, my)
+            self.draw_bar_chart(surface, gx, graph_y + 345, gw, gh, self.stats_data['combo'], CYAN_400, "COMBO ACHIEVED", mx, my)
+            
+        start_x_hb = (800 - (5 * slot_size + 4 * padding)) // 2
+        for i in range(5):
+            rect = pygame.Rect(start_x_hb + i * (slot_size + padding), hotbar_start_y, slot_size, slot_size)
+            s = pygame.Surface((slot_size, slot_size), pygame.SRCALPHA)
+            pygame.draw.rect(s, slot_bg, s.get_rect()) 
+            pygame.draw.rect(s, border_color, s.get_rect(), 1) 
+            surface.blit(s, (rect.x, rect.y))
+            surface.blit(self.tiny_font.render(str(i+1), True, TEXT_DIM), (rect.x+4, rect.y+2))
+            
+            item = self.inventory[i]
+            if item:
+                surface.blit(self.item_icons[item['id']], (rect.x+4, rect.y+4))
+                if item.get('qty', 1) > 1:
+                    surface.blit(self.tiny_font.render(str(item['qty']), True, WHITE), (rect.right-10, rect.bottom-12))
+
+        if self.dragged_item:
+            surface.blit(self.item_icons[self.dragged_item['id']], (mx - 16, my - 16))
 
     def draw_settings(self):
         if self.state == STATE_PAUSE:
@@ -1235,71 +1473,6 @@ class PygameApp:
         if not hasattr(self, 'nearby_interactables') or set(current_in_range) != set(self.nearby_interactables):
             self.nearby_interactables = current_in_range
             self.interact_index = 0
-
-    def draw_inventory_ui(self, surface):
-        slot_size = 40
-        padding = 6
-        start_x = (800 - (5 * slot_size + 4 * padding)) // 2
-        hotbar_start_y = 540
-        
-        slot_bg = BG_DARK 
-        border_color = BORDER_SUBTLE 
-        
-        if self.show_inventory:
-            inv_start_y = hotbar_start_y - (3 * (slot_size + padding)) - 10
-            
-            panel_w = 5 * slot_size + 4 * padding
-            panel_h = 60
-            stats_y = inv_start_y - panel_h - 10
-            
-            stats_s = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-            pygame.draw.rect(stats_s, (15, 18, 30, 200), stats_s.get_rect())
-            pygame.draw.rect(stats_s, GOLD_DIM, stats_s.get_rect(), 1)
-            surface.blit(stats_s, (start_x, stats_y))
-            
-            title_surf = self.small_font.render("PLAYER STATS", True, GOLD)
-            hp_surf = self.tiny_font.render(f"HP: {self.player.hp} / {self.player_max_hp}", True, TEXT_PRIMARY)
-            atk_surf = self.tiny_font.render(f"ATK: {self.base_atk}", True, TEXT_PRIMARY)
-            
-            surface.blit(title_surf, (start_x + 15, stats_y + 10))
-            surface.blit(hp_surf, (start_x + 15, stats_y + 35))
-            surface.blit(atk_surf, (start_x + 130, stats_y + 35))
-            
-            for i in range(15):
-                r, c = i // 5, i % 5
-                idx = i + 5
-                rect = pygame.Rect(start_x + c * (slot_size + padding), inv_start_y + r * (slot_size + padding), slot_size, slot_size)
-                
-                s = pygame.Surface((slot_size, slot_size), pygame.SRCALPHA)
-                pygame.draw.rect(s, slot_bg, s.get_rect()) 
-                pygame.draw.rect(s, border_color, s.get_rect(), 1) 
-                surface.blit(s, (rect.x, rect.y))
-                
-                item = self.inventory[idx]
-                if item:
-                    surface.blit(self.item_icons[item['id']], (rect.x+4, rect.y+4))
-                    if item.get('qty', 1) > 1:
-                        surface.blit(self.tiny_font.render(str(item['qty']), True, WHITE), (rect.right-10, rect.bottom-12))
-
-        for i in range(5):
-            rect = pygame.Rect(start_x + i * (slot_size + padding), hotbar_start_y, slot_size, slot_size)
-            
-            s = pygame.Surface((slot_size, slot_size), pygame.SRCALPHA)
-            pygame.draw.rect(s, slot_bg, s.get_rect()) 
-            pygame.draw.rect(s, border_color, s.get_rect(), 1) 
-            surface.blit(s, (rect.x, rect.y))
-            
-            surface.blit(self.tiny_font.render(str(i+1), True, TEXT_DIM), (rect.x+4, rect.y+2))
-            
-            item = self.inventory[i]
-            if item:
-                surface.blit(self.item_icons[item['id']], (rect.x+4, rect.y+4))
-                if item.get('qty', 1) > 1:
-                    surface.blit(self.tiny_font.render(str(item['qty']), True, WHITE), (rect.right-10, rect.bottom-12))
-
-        if self.dragged_item:
-            mx, my = pygame.mouse.get_pos()
-            surface.blit(self.item_icons[self.dragged_item['id']], (mx - 16, my - 16))
 
     def draw_sealed_auras(self):
         aura_colors = {
@@ -1552,7 +1725,6 @@ class PygameApp:
         surface.blit(name_surf, (x + 15, y + 15))
         
         ratio = max(0.0, min(1.0, curr / max_hp))
-        pct = int(ratio * 100)
         txt = self.small_font.render(f"{curr}/{max_hp} HP", True, TEXT_PRIMARY)
         surface.blit(txt, (x + panel_w - 15 - txt.get_width(), y + 15))
         
