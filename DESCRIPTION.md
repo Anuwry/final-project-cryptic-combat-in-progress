@@ -60,7 +60,7 @@ This project addresses both gaps by turning word solving into a direct combat sy
 [Project Proposal PDF](./cryptic-combat-project-proposal.pdf)
 
 ### YouTube Link
-The final presentation link is not attached yet  
+https://youtu.be/UlHH-OkNEg8
 
 ---
 
