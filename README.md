@@ -10,7 +10,7 @@ Cryptic Combat is a Python + Pygame word-combat roguelike where the player explo
 
 ## Requirements
 
-- Python 3.12 or newer recommended
+- Python 3.12
 - `pip`
 - A desktop environment that supports Pygame windows and audio
 
